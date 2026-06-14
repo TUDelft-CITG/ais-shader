@@ -7,7 +7,7 @@ import tomllib
 # Import from src modules
 from .renderer import run_rendering
 from .postprocessing import run_post_processing
-from .preprocessing import run_preprocessing
+from .preprocessing import run_preprocessing, run_wkb_conversion
 from .analysis import run_passage_analysis
 
 # Configure logging
@@ -82,9 +82,9 @@ def render(config_file, output_dir, scheduler, input_file, resume_dir, bbox, zoo
 @click.option("--clean-intermediate", is_flag=True, help="Delete intermediate NetCDF files (Zoom 0 to base-zoom-1) after processing.")
 @click.option("--cogs", is_flag=True, help="Export Cloud Optimized GeoTIFFs for the base zoom level.")
 @click.option("--config-file", type=click.Path(exists=True, path_type=Path), default=Path("config.toml"), help="Path to the configuration file.")
-def post_process(run_dir, base_zoom, scheduler, clean_intermediate, cogs, config_file):
+def postprocess(run_dir, base_zoom, scheduler, clean_intermediate, cogs, config_file):
     """
-    Post-process Zarr tiles to PNGs and COGs.
+    Postprocess Zarr tiles to PNGs and COGs.
     """
     run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs, config_file)
 
@@ -115,9 +115,41 @@ def post_process(run_dir, base_zoom, scheduler, clean_intermediate, cogs, config
 )
 def preprocess(input_file, output_file, partitions, scheduler):
     """
-    Preprocess AIS data (WKB -> GeoParquet -> Reproject).
+    Preprocess AIS data (GeoParquet/GPKG -> Reproject -> Spatial Partition).
     """
     run_preprocessing(input_file, output_file, partitions, scheduler)
+
+@cli.command()
+@click.option(
+    "--input-file",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to input WKB Parquet file.",
+)
+@click.option(
+    "--output-file",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Path to output GeoParquet file.",
+)
+@click.option(
+    "--partitions",
+    type=int,
+    default=None,
+    help="Number of partitions to process (for testing).",
+)
+@click.option(
+    "--scheduler",
+    type=str,
+    default=None,
+    help="Address of the Dask scheduler. If None, starts a local cluster.",
+)
+def convert_wkb(input_file, output_file, partitions, scheduler):
+    """
+    Convert a WKB-based Parquet file to a standard GeoParquet file.
+    """
+    run_wkb_conversion(input_file, output_file, partitions, scheduler)
+
 
 @cli.command()
 @click.option(

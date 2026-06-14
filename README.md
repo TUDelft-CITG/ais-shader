@@ -24,6 +24,12 @@ High-resolution, anti-aliased renderings showing vessel track density with sharp
 ![Map Detail 2](docs/images/map_detail_2.png)
 ![Map Detail 3](docs/images/map_detail_3.png)
 
+### Lateral Crossing Profiles
+Normalized lateral crossing speed/frequency profiles calculated across passage lines using lateral profile binning.
+
+![Lateral Crossing Profiles](docs/images/profiles.png)
+
+
 ### Colormaps
 Custom transparent colormaps used for visualization. Any matplotlib or crameri colormap can be used.
 
@@ -102,12 +108,7 @@ Use `line_width = 1`. This produces smooth, anti-aliased lines that represent th
 
 **For Analysis (Fair Counts):**
 Use `line_width = 0`. This uses Bresenham's algorithm to select exactly one pixel per step along the major axis. This produces **Integer Counts**, which is the "fairest" way to count *events* (vessel transits) without introducing fractional artifacts.
-
-
-
-
-
-
+### 3. Processing (Phase 1: Render)
 
 Generate raw count data (Zarr) for the highest zoom level (e.g., Zoom 7). Zarr is used to support multi-dimensional categorical data and parallel writes.
 
@@ -136,10 +137,10 @@ Process the raw Zarr files to generate seamless, transparent PNGs and lower zoom
 
 ```bash
 # Run post-processing on a specific run directory
-uv run ais-shader post_process --run-dir rendered/run_YYYYMMDD_HHMMSS --base-zoom 7
+uv run ais-shader postprocess --run-dir rendered/run_YYYYMMDD_HHMMSS --base-zoom 7
 
 # Optional: Clean up intermediate Zarr files to save space
-uv run ais-shader post_process --run-dir rendered/run_YYYYMMDD_HHMMSS --base-zoom 7 --clean-intermediate
+uv run ais-shader postprocess --run-dir rendered/run_YYYYMMDD_HHMMSS --base-zoom 7 --clean-intermediate
 ```
 
 This script will:

@@ -46,22 +46,9 @@ def render_tile(nc_path, output_path, cmap, global_max, log_scale=True):
     """
     # Open Zarr
     with xr.open_zarr(nc_path) as ds:
-        # Find the correct data variable
-        var_name = None
-        if "counts" in ds.data_vars:
-            var_name = "counts"
-        elif "__xarray_dataarray_variable__" in ds.data_vars:
-            var_name = "__xarray_dataarray_variable__"
-        else:
-            # Fallback: pick first non-spatial_ref variable
-            for v in ds.data_vars:
-                if v != "spatial_ref":
-                    var_name = v
-                    break
-        
-        if not var_name:
-            logger.warning(f"No data variable found in {nc_path}")
-            return
+        if "counts" not in ds.data_vars:
+            raise KeyError(f"'counts' data variable not found in Zarr dataset: {nc_path}")
+        var_name = "counts"
 
         da = ds[var_name]
         
@@ -200,14 +187,9 @@ def aggregate_children(parent_key, children):
     
     for child_path in children:
         with xr.open_zarr(child_path) as ds:
-            if "counts" in ds.data_vars:
-                da = ds["counts"]
-            else:
-                vars = [v for v in ds.data_vars if v != "spatial_ref"]
-                if not vars:
-                    logger.warning(f"Skipping {child_path}: No data variable found.")
-                    continue
-                da = ds[vars[0]]
+            if "counts" not in ds.data_vars:
+                raise KeyError(f"'counts' data variable not found in Zarr dataset: {child_path}")
+            da = ds["counts"]
 
             # Load data into memory to avoid file handle issues during aggregation
             da.load()
@@ -311,73 +293,53 @@ def export_single_cog(nc_path, tiff_dir):
     """
     Convert a single NetCDF tile to COG.
     """
-    try:
-        with xr.open_zarr(nc_path) as ds:
-            # Find the correct data variable
-            var_name = None
-            if "counts" in ds.data_vars:
-                var_name = "counts"
-            elif "__xarray_dataarray_variable__" in ds.data_vars:
-                var_name = "__xarray_dataarray_variable__"
-            else:
-                # Fallback: pick first non-spatial_ref variable
-                for v in ds.data_vars:
-                    if v != "spatial_ref":
-                        var_name = v
-                        break
-            
-            if not var_name:
-                return None
+    with xr.open_zarr(nc_path) as ds:
+        if "counts" not in ds.data_vars:
+            raise KeyError(f"'counts' data variable not found in Zarr dataset: {nc_path}")
+        var_name = "counts"
 
-            da = ds[var_name]
+        da = ds[var_name]
+        
+        # Prepare for GeoTIFF: needs (band, y, x)
+        non_spatial = [d for d in da.dims if d not in ('y', 'x')]
+        
+        if len(non_spatial) > 1:
+            if 'band' in da.dims and da.sizes['band'] == 1:
+                da = da.squeeze('band')
             
-            # Prepare for GeoTIFF: needs (band, y, x)
-            non_spatial = [d for d in da.dims if d not in ('y', 'x')]
+            cat_dim = [d for d in da.dims if d not in ('y', 'x')][0]
+            da = da.transpose(cat_dim, 'y', 'x')
             
-            if len(non_spatial) > 1:
-                if 'band' in da.dims and da.sizes['band'] == 1:
-                    da = da.squeeze('band')
-                
-                cat_dim = [d for d in da.dims if d not in ('y', 'x')][0]
-                da = da.transpose(cat_dim, 'y', 'x')
-                
-            elif len(non_spatial) == 1:
-                d = non_spatial[0]
-                da = da.transpose(d, 'y', 'x')
-            
-            # Ensure float/int type compatible with TIFF
-            da = da.astype("float32")
-            
-            if not da.rio.crs:
-                da.rio.write_crs("EPSG:3857", inplace=True)
-            
-            descriptions = None
-            # The first dimension is now the band/category dimension
-            first_dim = da.dims[0]
-            if first_dim not in ('y', 'x') and len(da.coords[first_dim]) > 1:
-                 cats = da.coords[first_dim].values
-                 descriptions = [str(cat) for cat in cats]
-            
-            tiff_path = tiff_dir / f"{nc_path.stem}.tif"
-            
-            # Save as COG
-            da.rio.to_raster(tiff_path, tiled=True, compress="DEFLATE")
-            
-            # Update band descriptions using rasterio directly
-            if descriptions:
-                import rasterio
-                try:
-                    with rasterio.open(tiff_path, "r+") as dst:
-                        for i, desc in enumerate(descriptions, start=1):
-                            dst.set_band_description(i, desc)
-                except Exception as e:
-                    logger.warning(f"Failed to update band descriptions for {tiff_path}: {e}")
-            
-            return tiff_path
-            
-    except Exception as e:
-        logger.warning(f"Failed to export COG {nc_path}: {e}")
-        return None
+        elif len(non_spatial) == 1:
+            d = non_spatial[0]
+            da = da.transpose(d, 'y', 'x')
+        
+        # Ensure float/int type compatible with TIFF
+        da = da.astype("float32")
+        
+        if not da.rio.crs:
+            da.rio.write_crs("EPSG:3857", inplace=True)
+        
+        descriptions = None
+        # The first dimension is now the band/category dimension
+        first_dim = da.dims[0]
+        if first_dim not in ('y', 'x') and len(da.coords[first_dim]) > 1:
+             cats = da.coords[first_dim].values
+             descriptions = [str(cat) for cat in cats]
+        
+        tiff_path = tiff_dir / f"{nc_path.stem}.tif"
+        
+        # Save as COG
+        da.rio.to_raster(tiff_path, tiled=True, compress="DEFLATE")
+        
+        # Update band descriptions using rasterio directly
+        if descriptions:
+            import rasterio
+            with rasterio.open(tiff_path, "r+") as dst:
+                for i, desc in enumerate(descriptions, start=1):
+                    dst.set_band_description(i, desc)
+        
+        return tiff_path
 
 def calculate_robust_max(nc_dir, zoom, sample_size=1_000_000):
     """
@@ -401,20 +363,9 @@ def calculate_robust_max(nc_dir, zoom, sample_size=1_000_000):
     for nc in tqdm(tiles_to_scan, desc=f"Sampling Zoom {zoom}"):
         try:
             with xr.open_zarr(nc) as ds:
-                # Find data variable
-                var_name = None
-                if "counts" in ds.data_vars:
-                    var_name = "counts"
-                elif "__xarray_dataarray_variable__" in ds.data_vars:
-                    var_name = "__xarray_dataarray_variable__"
-                else:
-                    for v in ds.data_vars:
-                        if v != "spatial_ref":
-                            var_name = v
-                            break
-                
-                if not var_name:
-                    continue
+                if "counts" not in ds.data_vars:
+                    raise KeyError(f"'counts' data variable not found in Zarr dataset: {nc}")
+                var_name = "counts"
 
                 da = ds[var_name]
                 
@@ -511,11 +462,8 @@ def run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs,
 
         # Delete all .zarr files where zoom < base_zoom
         for nc in nc_dir.glob("tile_*.zarr"):
-            try:
-                parts = nc.name.split("_")
-                z = int(parts[1])
-                if z < base_zoom:
-                    shutil.rmtree(nc)
-            except Exception as e:
-                logger.warning(f"Failed to delete {nc}: {e}")
+            parts = nc.name.split("_")
+            z = int(parts[1])
+            if z < base_zoom:
+                shutil.rmtree(nc)
         logger.info("Cleanup complete.")

@@ -31,7 +31,7 @@ Processing high-zoom levels (e.g., Zoom 10) involves thousands of tiles.
 We migrated the intermediate storage format from NetCDF to Zarr to address concurrency issues.
 - **Problem**: NetCDF (based on HDF5) often requires file locking, which causes failures or corruption when multiple Dask workers attempt to write to the same dataset or even different files in the same directory concurrently.
 - **Solution**: Zarr is designed for cloud-native, parallel access. It uses a directory of chunks, allowing multiple workers to write to independent keys without locking conflicts.
-- **Note**: While Zarr enables safe parallel writing, we still recommend limiting concurrency for the *pyramid generation* step (`post_process.py`) to avoid excessive memory usage:
+- **Note**: While Zarr enables safe parallel writing, we still recommend limiting concurrency for the *pyramid generation* step (`postprocess` command / `postprocessing.py`) to avoid excessive memory usage:
   ```bash
   # Run with a single worker for maximum stability
   uv run dask worker tcp://127.0.0.1:8786 --nworkers 1 --memory-limit 8GB
@@ -58,6 +58,63 @@ Estimates based on a full run of the US dataset, accounting for **data sparsity*
 | 14 | 11,628,549 | 9.5 m | ~1.3% | ~56 GB | ~10 days | ~2.5 hours |
 
 > **Note**: "Probable Size" accounts for empty tiles being skipped. "Dense Size" (worst case) would be significantly higher (e.g., ~4.3 TB for Z14).
+
+## File Formats & Data Schemas
+
+This section documents the file formats and schemas consumed and produced by the `ais-shader` pipeline.
+
+### 1. Preprocessed GeoParquet
+- **Format**: Apache Parquet with spatial metadata compliant with the GeoParquet specification.
+- **CRS**: `EPSG:3857` (WGS 84 / Pseudo-Mercator, required for metric-based rendering).
+- **Partitioning**: Spatially partitioned into continuous geometric bounds stored within the file metadata.
+- **Core Columns**:
+  - `geometry`: Geometry representation of tracks (typically `LineString`).
+  - `track_id` (or MMSI): Unique identifier for each vessel/track.
+  - `timestamp`: Chronological observation timestamp.
+  - `sog`: Speed Over Ground.
+
+### 2. Intermediate Zarr Tiles
+- **Format**: Zarr dataset group stored as a directory structure on disk.
+- **Directory Structure**: `rendered/run_YYYYMMDD_HHMMSS/zarr/tile_{zoom}_{x}_{y}.zarr/`
+- **Data Variables**:
+  - `counts`: A 3D or 4D coordinate array (`band` or `category`, `y`, `x`) storing track densities as `int32`.
+  - `spatial_ref`: Reference coordinates describing the coordinate projection and affine transformation matrix.
+- **Attributes**:
+  - CRS: EPSG:3857
+  - Transform: Affine transform matching the Web Mercator tile boundaries.
+
+### 3. Visualized PNG Tiles
+- **Format**: 4-channel `RGBA` Portable Network Graphics.
+- **Directory Structure**: `rendered/run_YYYYMMDD_HHMMSS/png/{zoom}/{x}/{y}.png`
+- **Normalization**: Pixel values are normalized dynamically using the 98th percentile (`robust max`) of track densities for the corresponding zoom level, then mapped via a colormap (default: Crameri Oslo) with transparency applied to low-density areas.
+
+### 4. Cloud Optimized GeoTIFF (COG)
+- **Format**: Tiled, DEFLATE-compressed, floating-point raster arrays.
+- **Data Type**: `float32`.
+- **CRS**: `EPSG:3857`.
+- **Metadata**: Includes band description metadata indicating category names when using a categorical column.
+
+### 5. Passage Line Crossing Velocities
+- **Format**: GeoJSON or GeoPackage (`.gpkg`).
+- **CRS**: `EPSG:4326` (reprojected back from EPSG:3857 for GIS utility).
+- **Feature Schema**:
+  - `frequency_up` / `frequency_down`: Total count of crossings in each direction (`int`).
+  - `median_speed_up` / `median_speed_down`: Median speed of crossings in each direction (`float` in knots).
+  - `loc_bin_{i}_{direction}`: Count of crossings falling into lateral gate bin $i \in [0, 19]$ in the specified direction (`int`).
+  - `median_speed_loc_{i}_{direction}`: Median speed of crossings in lateral gate bin $i \in [0, 19]$ (`float`).
+
+### 6. Passage Bin Segments
+- **Format**: GeoJSON (`*_bin_segments.geojson`).
+- **CRS**: `EPSG:4326`.
+- **Geometry**: `LineString` representing the spatial segment of the passage line corresponding to the lateral bin.
+- **Feature Schema**:
+  - `PassageId`: ID of the parent passage line.
+  - `BinIndex`: Index of the bin ($0$ to $19$).
+  - `Direction`: Crossing direction (`up` or `down`).
+  - `Frequency`: Number of crossings in this specific bin segment.
+  - `MedianSpeed`: Median speed in this segment (knots).
+  - `ProfileLength`: Total length of the parent passage line (meters).
+  - `BinWidth`: Width of this segment in meters (ProfileLength / 20.0).
 
 ## Known Issues & Limitations
 - **Zarr Serialization**: We explicitly disable compression for the `spatial_ref` coordinate to avoid `numpy.int64` serialization warnings in some versions of Xarray/Zarr.
