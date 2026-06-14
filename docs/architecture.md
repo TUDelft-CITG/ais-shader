@@ -31,7 +31,7 @@ Processing high-zoom levels (e.g., Zoom 10) involves thousands of tiles.
 We migrated the intermediate storage format from NetCDF to Zarr to address concurrency issues.
 - **Problem**: NetCDF (based on HDF5) often requires file locking, which causes failures or corruption when multiple Dask workers attempt to write to the same dataset or even different files in the same directory concurrently.
 - **Solution**: Zarr is designed for cloud-native, parallel access. It uses a directory of chunks, allowing multiple workers to write to independent keys without locking conflicts.
-- **Note**: While Zarr enables safe parallel writing, we still recommend limiting concurrency for the *pyramid generation* step (`post_process.py`) to avoid excessive memory usage:
+- **Note**: While Zarr enables safe parallel writing, we still recommend limiting concurrency for the *pyramid generation* step (`postprocess` command / `postprocessing.py`) to avoid excessive memory usage:
   ```bash
   # Run with a single worker for maximum stability
   uv run dask worker tcp://127.0.0.1:8786 --nworkers 1 --memory-limit 8GB

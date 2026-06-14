@@ -137,10 +137,10 @@ Process the raw Zarr files to generate seamless, transparent PNGs and lower zoom
 
 ```bash
 # Run post-processing on a specific run directory
-uv run ais-shader post_process --run-dir rendered/run_YYYYMMDD_HHMMSS --base-zoom 7
+uv run ais-shader postprocess --run-dir rendered/run_YYYYMMDD_HHMMSS --base-zoom 7
 
 # Optional: Clean up intermediate Zarr files to save space
-uv run ais-shader post_process --run-dir rendered/run_YYYYMMDD_HHMMSS --base-zoom 7 --clean-intermediate
+uv run ais-shader postprocess --run-dir rendered/run_YYYYMMDD_HHMMSS --base-zoom 7 --clean-intermediate
 ```
 
 This script will:
