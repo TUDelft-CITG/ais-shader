@@ -139,12 +139,6 @@ def preprocess(input_file, output_file, partitions, scheduler):
     help="Path to output GeoJSON/GPKG file.",
 )
 @click.option(
-    "--speed-bins",
-    type=str,
-    default="0,2,5,10,15,20,25,30,50,100",
-    help="Comma-separated list of speed bins.",
-)
-@click.option(
     "--max-time-gap",
     type=float,
     default=7200.0,
@@ -156,11 +150,11 @@ def preprocess(input_file, output_file, partitions, scheduler):
     default=None,
     help="Address of the Dask scheduler (e.g., tcp://127.0.0.1:8786). If None, starts a local cluster.",
 )
-def analyze_passage(passage_file, ais_dir, output_file, speed_bins, max_time_gap, scheduler):
+def analyze_passage(passage_file, ais_dir, output_file, max_time_gap, scheduler):
     """
     Compute velocities along passage lines using AIS parquet files.
     """
-    run_passage_analysis(passage_file, ais_dir, output_file, speed_bins, max_time_gap, scheduler)
+    run_passage_analysis(passage_file, ais_dir, output_file, max_time_gap, scheduler)
 
 if __name__ == "__main__":
     cli()
