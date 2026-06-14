@@ -8,6 +8,8 @@
 #SBATCH --job-name=ais-passage-analysis
 #SBATCH --output=ais_passage_%j.log
 
+set -euo pipefail
+
 echo "Starting passage analysis job..."
 date
 

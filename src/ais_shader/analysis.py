@@ -169,7 +169,6 @@ def run_passage_analysis(
     passage_file: Path,
     ais_dir: Path,
     output_file: Path,
-    speed_bins: str,
     max_time_gap: float,
     scheduler: str = None
 ):
@@ -208,10 +207,12 @@ def run_passage_analysis(
     logger.info(f"Total partitions: {ddf.npartitions}")
     
     # Process crossings with Dask performance report
-    report_path = "/scratch-shared/fbaart/data/dask-report-optimized-v2.html"
+    # Ensure output directory exists before generating report
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    report_path = output_file.parent / f"{output_file.stem}-dask-report.html"
     logger.info(f"Computing crossings per partition and saving performance report to {report_path}...")
     meta = pd.DataFrame(columns=['PassageId', 'speed', 'loc_fraction', 'direction'])
-    with performance_report(filename=report_path):
+    with performance_report(filename=str(report_path)):
         crossings_df = ddf.map_partitions(
             process_partition,
             passage_lines_gdf=passage_lines,
@@ -237,7 +238,7 @@ def run_passage_analysis(
     # --- Calculate overall frequencies and median speeds per PassageId and direction ---
     logger.info("Aggregating overall frequencies and median speeds per direction...")
     overall_stats = crossings_df.groupby(['PassageId', 'direction'], observed=False).agg(
-        frequency=('speed', 'size'),
+        frequency=('speed', 'count'),
         median_speed=('speed', 'median')
     ).reset_index()
     
@@ -250,12 +251,63 @@ def run_passage_analysis(
     logger.info("Merging overall stats back to passage lines...")
     output_gdf = passage_lines.merge(pivot_df, on='PassageId', how='left')
     
+    # Ensure all target overall columns exist in output_gdf
+    for col in ['frequency_up', 'frequency_down', 'median_speed_up', 'median_speed_down']:
+        if col not in output_gdf.columns:
+            output_gdf[col] = np.nan
+            
     # Fill NAs
     output_gdf['frequency_up'] = output_gdf['frequency_up'].fillna(0).astype(int)
     output_gdf['frequency_down'] = output_gdf['frequency_down'].fillna(0).astype(int)
     output_gdf['median_speed_up'] = output_gdf['median_speed_up'].fillna(0.0)
     output_gdf['median_speed_down'] = output_gdf['median_speed_down'].fillna(0.0)
     
+    # --- 20-Bin Segments generation ---
+    logger.info("Calculating 20-bin segment statistics...")
+    loc_bins_list = np.linspace(0.0, 1.0, 21)
+    loc_bin_labels = list(range(20))
+    # Clip loc_fraction to [0.0, 1.0 - 1e-9] to handle loc_fraction == 1.0 safely when right=False
+    loc_fraction_clipped = crossings_df['loc_fraction'].clip(0.0, 1.0 - 1e-9)
+    crossings_df['BinIndex'] = pd.cut(loc_fraction_clipped, bins=loc_bins_list, labels=loc_bin_labels, right=False)
+    
+    # Group by PassageId, BinIndex, and direction
+    stats_df = crossings_df.groupby(['PassageId', 'BinIndex', 'direction'], observed=False).agg(
+        Frequency=('speed', 'count'),
+        MedianSpeed=('speed', 'median')
+    ).reset_index()
+    
+    # Pivot bin stats to get loc_bin_{i}_{direction} and median_speed_loc_{i}_{direction}
+    if not stats_df.empty:
+        bin_stats_pivot = stats_df.pivot(
+            index='PassageId',
+            columns=['BinIndex', 'direction'],
+            values=['Frequency', 'MedianSpeed']
+        )
+        # Rename columns to: loc_bin_{BinIndex}_{direction} and median_speed_loc_{BinIndex}_{direction}
+        bin_stats_pivot.columns = [
+            f"loc_bin_{col[1]}_{col[2]}" if col[0] == 'Frequency' else f"median_speed_loc_{col[1]}_{col[2]}"
+            for col in bin_stats_pivot.columns
+        ]
+        bin_stats_pivot = bin_stats_pivot.reset_index()
+        
+        # Merge bin_stats_pivot back to output_gdf
+        output_gdf = output_gdf.merge(bin_stats_pivot, on='PassageId', how='left')
+        
+    # Ensure all 80 bin columns exist in output_gdf and are filled/typed correctly
+    for i in range(20):
+        for d in ['up', 'down']:
+            freq_col = f"loc_bin_{i}_{d}"
+            median_col = f"median_speed_loc_{i}_{d}"
+            if freq_col not in output_gdf.columns:
+                output_gdf[freq_col] = 0
+            else:
+                output_gdf[freq_col] = output_gdf[freq_col].fillna(0).astype(int)
+            
+            if median_col not in output_gdf.columns:
+                output_gdf[median_col] = 0.0
+            else:
+                output_gdf[median_col] = output_gdf[median_col].fillna(0.0)
+
     # Drop calculated helper vectors from output GeoJSON properties
     output_gdf = output_gdf.drop(columns=['L_x', 'L_y'])
     
@@ -265,24 +317,11 @@ def run_passage_analysis(
     
     # Save main velocities output
     logger.info(f"Saving main velocities results to {output_file}...")
-    output_file.parent.mkdir(parents=True, exist_ok=True)
     if output_file.suffix.lower() == '.gpkg':
         output_gdf.to_file(output_file, driver="GPKG")
     else:
         output_gdf.to_file(output_file, driver="GeoJSON")
         
-    # --- 20-Bin Segments generation ---
-    logger.info("Calculating 20-bin segment statistics...")
-    loc_bins_list = np.linspace(0.0, 1.0, 21)
-    loc_bin_labels = list(range(20))
-    crossings_df['BinIndex'] = pd.cut(crossings_df['loc_fraction'], bins=loc_bins_list, labels=loc_bin_labels, right=False)
-    
-    # Group by PassageId, BinIndex, and direction
-    stats_df = crossings_df.groupby(['PassageId', 'BinIndex', 'direction'], observed=False).agg(
-        Frequency=('speed', 'size'),
-        MedianSpeed=('speed', 'median')
-    ).reset_index()
-    
     # Filter to segments with crossings
     stats_df = stats_df[stats_df['Frequency'] > 0].copy()
     
@@ -291,10 +330,16 @@ def run_passage_analysis(
         row['PassageId']: row['geometry']
         for _, row in passage_lines.iterrows()
     }
-    passage_lengths = {
-        row['PassageId']: float(row['Length'])
-        for _, row in passage_lines.iterrows()
-    }
+    if 'Length' in passage_lines.columns:
+        passage_lengths = {
+            row['PassageId']: float(row['Length'])
+            for _, row in passage_lines.iterrows()
+        }
+    else:
+        passage_lengths = {
+            row['PassageId']: float(row['geometry'].length)
+            for _, row in passage_lines.iterrows()
+        }
     
     # Map ProfileLength into stats_df
     stats_df['ProfileLength'] = stats_df['PassageId'].map(passage_lengths)
@@ -322,8 +367,8 @@ def run_passage_analysis(
     stats_gdf_4326['ProfileLength'] = stats_gdf_4326['ProfileLength'].fillna(0.0)
     stats_gdf_4326['BinWidth'] = stats_gdf_4326['ProfileLength'] / 20.0
     
-    # Save segments output
-    segments_output_file = output_file.parent / "PassageLine_NL_bin_segments.geojson"
+    # Save segments output next to output_file with matching stem
+    segments_output_file = output_file.parent / f"{output_file.stem}_bin_segments.geojson"
     logger.info(f"Saving bin segments results to {segments_output_file}...")
     stats_gdf_4326.to_file(segments_output_file, driver="GeoJSON")
     

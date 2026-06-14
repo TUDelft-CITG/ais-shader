@@ -19,8 +19,8 @@ def test_passage_crossing():
     passage_line_gdf['L_y'] = np.array([c[-1][1] - c[0][1] for c in coords_list])
     
     # 2. Create synthetic vessel tracks crossing the line:
-    # Track 1 (vessel-1): (0.0, 0.0) -> (0.0, 0.1) (crossing upward, direction='up')
-    # Track 2 (vessel-2): (0.0, 0.1) -> (0.0, 0.0) (crossing downward, direction='down')
+    # Track 1 (vessel-1): (0.0, 0.0) -> (0.0, 0.1) (crossing northward; since normal N points north, direction='down')
+    # Track 2 (vessel-2): (0.0, 0.1) -> (0.0, 0.0) (crossing southward; since normal N points north, direction='up')
     df = pd.DataFrame({
         'track_id': ['vessel-1', 'vessel-1', 'vessel-2', 'vessel-2'],
         'longitude': [0.0, 0.0, 0.0, 0.0],
