@@ -27,81 +27,71 @@ def render_tile_task(gdf_local, tile, zarr_dir, config):
     Render a single tile from a computed GeoDataFrame.
     This runs on a worker.
     """
-    try:
-        if len(gdf_local) == 0:
-            return
+    if len(gdf_local) == 0:
+        return
 
-        tms = morecantile.tms.get("WebMercatorQuad")
-        bbox = tms.xy_bounds(tile)
-        
-        # Define canvas
-        tile_size = config["visualization"]["tile_size"]
-        cvs = ds.Canvas(
-            plot_width=tile_size, 
-            plot_height=tile_size,
-            x_range=(bbox.left, bbox.right),
-            y_range=(bbox.bottom, bbox.top)
-        )
+    tms = morecantile.tms.get("WebMercatorQuad")
+    bbox = tms.xy_bounds(tile)
+    
+    # Define canvas
+    tile_size = config["visualization"]["tile_size"]
+    cvs = ds.Canvas(
+        plot_width=tile_size, 
+        plot_height=tile_size,
+        x_range=(bbox.left, bbox.right),
+        y_range=(bbox.bottom, bbox.top)
+    )
 
-        # Aggregate
-        line_width = config["visualization"]["line_width"]
-        category_column = config["visualization"].get("category_column")
-        
-        if category_column:
-            if category_column in gdf_local.columns:
-                gdf_local[category_column] = gdf_local[category_column].astype("category")
-                agg = cvs.line(gdf_local, geometry='geometry', agg=ds.by(category_column, ds.count()))
-            else:
-                agg = cvs.line(gdf_local, geometry='geometry', agg=ds.count())
-        elif line_width == 0:
-            agg = cvs.line(gdf_local, geometry='geometry', agg=ds.count())
-        else:
-            agg = cvs.line(gdf_local, geometry='geometry', line_width=line_width)
+    # Aggregate
+    line_width = config["visualization"]["line_width"]
+    category_column = config["visualization"].get("category_column")
+    
+    if category_column:
+        gdf_local[category_column] = gdf_local[category_column].astype("category")
+        agg = cvs.line(gdf_local, geometry='geometry', agg=ds.by(category_column, ds.count()))
+    elif line_width == 0:
+        agg = cvs.line(gdf_local, geometry='geometry', agg=ds.count())
+    else:
+        agg = cvs.line(gdf_local, geometry='geometry', line_width=line_width)
 
-        # --- Save Zarr (Counts) ---
-        # Create transform
-        transform = from_bounds(bbox.left, bbox.bottom, bbox.right, bbox.top, tile_size, tile_size)
-        
-        # Prepare DataArray for saving
-        if isinstance(agg, xr.Dataset):
-            da = agg.to_array(dim="band")
-            da = da.fillna(0).astype("int32")
-        else:
-            da = agg.fillna(0).astype("int32")
-            da = da.expand_dims(dim={'band': 1})
+    # --- Save Zarr (Counts) ---
+    # Create transform
+    transform = from_bounds(bbox.left, bbox.bottom, bbox.right, bbox.top, tile_size, tile_size)
+    
+    # Prepare DataArray for saving
+    if isinstance(agg, xr.Dataset):
+        da = agg.to_array(dim="band")
+        da = da.fillna(0).astype("int32")
+    else:
+        da = agg.fillna(0).astype("int32")
+        da = da.expand_dims(dim={'band': 1})
 
-        # Set CRS and Transform
-        da.rio.write_crs("EPSG:3857", inplace=True)
-        da.rio.write_transform(transform, inplace=True)
-        
-        # Save as Zarr
-        zarr_path = zarr_dir / f"tile_{tile.z}_{tile.x}_{tile.y}.zarr"
-        
-        if not da.name:
-            da.name = "counts"
-        
-        # Encoding: disable compression for spatial_ref
-        encoding = {"spatial_ref": {"compressor": None}}
-        
-        da.to_zarr(zarr_path, mode="w", consolidated=True, encoding=encoding)
-        
-        # Logging stats (print to stdout for Dask capture)
-        if isinstance(agg, xr.Dataset):
-            total_sum = float(da.sum())
-            max_val = float(da.max())
-            logger.info(f"Tile {tile} stats: sum={total_sum}, max={max_val}, categories={len(agg.data_vars)}")
-        else:
-            agg_sum = float(agg.sum())
-            agg_max = float(agg.max())
-            logger.info(f"Tile {tile} stats: sum={agg_sum}, max={agg_max}")
+    # Set CRS and Transform
+    da.rio.write_crs("EPSG:3857", inplace=True)
+    da.rio.write_transform(transform, inplace=True)
+    
+    # Save as Zarr
+    zarr_path = zarr_dir / f"tile_{tile.z}_{tile.x}_{tile.y}.zarr"
+    
+    da.name = "counts"
+    
+    # Encoding: disable compression for spatial_ref
+    encoding = {"spatial_ref": {"compressor": None}}
+    
+    da.to_zarr(zarr_path, mode="w", consolidated=True, encoding=encoding)
+    
+    # Logging stats (print to stdout for Dask capture)
+    if isinstance(agg, xr.Dataset):
+        total_sum = float(da.sum())
+        max_val = float(da.max())
+        logger.info(f"Tile {tile} stats: sum={total_sum}, max={max_val}, categories={len(agg.data_vars)}")
+    else:
+        agg_sum = float(agg.sum())
+        agg_max = float(agg.max())
+        logger.info(f"Tile {tile} stats: sum={agg_sum}, max={agg_max}")
 
-        logger.info(f"Saved Zarr for tile {tile}")
-        
-    except Exception as e:
-        import traceback
-        logger.error(f"Error processing tile {tile}: {e}")
-        logger.error(traceback.format_exc())
-        raise e
+    logger.info(f"Saved Zarr for tile {tile}")
+
 
 
 def monitor_resources(interval=5, stop_event=None):
@@ -132,6 +122,11 @@ def render_tiles(coords_ddf, output_dir: Path, config: dict):
 
     # Define TileMatrixSet (WebMercatorQuad)
     tms = morecantile.tms.get("WebMercatorQuad")
+    
+    # Validate category column presence at startup
+    category_column = config["visualization"].get("category_column")
+    if category_column and category_column not in coords_ddf.columns:
+        raise ValueError(f"Category column '{category_column}' not found in dataset schema. Available columns: {list(coords_ddf.columns)}")
     
     # Define US Bounding Box
     us_bbox = tuple(config["visualization"]["bbox"])
