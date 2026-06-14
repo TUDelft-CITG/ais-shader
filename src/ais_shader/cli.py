@@ -8,6 +8,7 @@ import tomllib
 from .renderer import run_rendering
 from .postprocessing import run_post_processing
 from .preprocessing import run_preprocessing
+from .analysis import run_passage_analysis
 
 # Configure logging
 logging.basicConfig(
@@ -117,6 +118,49 @@ def preprocess(input_file, output_file, partitions, scheduler):
     Preprocess AIS data (WKB -> GeoParquet -> Reproject).
     """
     run_preprocessing(input_file, output_file, partitions, scheduler)
+
+@cli.command()
+@click.option(
+    "--passage-file",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("/scratch-shared/fbaart/data/euris-export/PassageLine_NL_20260224.geojson"),
+    help="Path to the passage line GeoJSON file.",
+)
+@click.option(
+    "--ais-dir",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("/scratch-shared/fbaart/data/ais_data/20260430-2093161291.8-anonymous1-Noordzee_2025_01_TUD.parquet"),
+    help="Path to the AIS Parquet directory.",
+)
+@click.option(
+    "--output-file",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Path to output GeoJSON/GPKG file.",
+)
+@click.option(
+    "--speed-bins",
+    type=str,
+    default="0,2,5,10,15,20,25,30,50,100",
+    help="Comma-separated list of speed bins.",
+)
+@click.option(
+    "--max-time-gap",
+    type=float,
+    default=7200.0,
+    help="Maximum time gap between points to construct a segment (in seconds).",
+)
+@click.option(
+    "--scheduler",
+    type=str,
+    default=None,
+    help="Address of the Dask scheduler (e.g., tcp://127.0.0.1:8786). If None, starts a local cluster.",
+)
+def analyze_passage(passage_file, ais_dir, output_file, speed_bins, max_time_gap, scheduler):
+    """
+    Compute velocities along passage lines using AIS parquet files.
+    """
+    run_passage_analysis(passage_file, ais_dir, output_file, speed_bins, max_time_gap, scheduler)
 
 if __name__ == "__main__":
     cli()
