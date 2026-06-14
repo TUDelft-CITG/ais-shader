@@ -286,11 +286,18 @@ def run_passage_analysis(
     # Filter to segments with crossings
     stats_df = stats_df[stats_df['Frequency'] > 0].copy()
     
-    # Pre-map passage lines geometries in EPSG:3857 for accurate segment interpolation
+    # Pre-map passage lines geometries and lengths in EPSG:3857 for accurate segment interpolation
     passage_geoms_3857 = {
         row['PassageId']: row['geometry']
         for _, row in passage_lines.iterrows()
     }
+    passage_lengths = {
+        row['PassageId']: float(row['Length'])
+        for _, row in passage_lines.iterrows()
+    }
+    
+    # Map ProfileLength into stats_df
+    stats_df['ProfileLength'] = stats_df['PassageId'].map(passage_lengths)
     
     logger.info("Generating physical LineString geometries for active bin segments...")
     segment_geoms_3857 = []
@@ -312,6 +319,8 @@ def run_passage_analysis(
     stats_gdf_4326 = stats_gdf_3857.to_crs("EPSG:4326")
     stats_gdf_4326 = stats_gdf_4326.rename(columns={'direction': 'Direction'})
     stats_gdf_4326['MedianSpeed'] = stats_gdf_4326['MedianSpeed'].fillna(0.0)
+    stats_gdf_4326['ProfileLength'] = stats_gdf_4326['ProfileLength'].fillna(0.0)
+    stats_gdf_4326['BinWidth'] = stats_gdf_4326['ProfileLength'] / 20.0
     
     # Save segments output
     segments_output_file = output_file.parent / "PassageLine_NL_bin_segments.geojson"
