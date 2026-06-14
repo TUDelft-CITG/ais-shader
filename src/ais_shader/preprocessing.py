@@ -9,11 +9,12 @@ from dask.distributed import Client
 logger = logging.getLogger(__name__)
 
 def convert_to_gdf(df: pd.DataFrame) -> gpd.GeoDataFrame:
-    """Convert WKB to GeoDataFrame."""
+    """Convert WKB to GeoDataFrame, preserving all non-Shape columns."""
     if "Shape" not in df.columns:
-        return df
-    gs = gpd.GeoSeries.from_wkb(df["Shape"])
-    gdf = gpd.GeoDataFrame(geometry=gs, crs="EPSG:4269")
+        raise KeyError("Required column 'Shape' (WKB format) not found in DataFrame.")
+    df_copy = df.copy()
+    gs = gpd.GeoSeries.from_wkb(df_copy.pop("Shape"))
+    gdf = gpd.GeoDataFrame(df_copy, geometry=gs, crs="EPSG:4269")
     return gdf
 
 def run_preprocessing(input_file: Path, output_file: Path, partitions: int, scheduler: str):
@@ -91,7 +92,10 @@ def run_wkb_conversion(input_file: Path, output_file: Path, partitions: int, sch
 
     # Convert to GeoDataFrame
     logger.info("Converting WKB to GeoDataFrame...")
-    meta_gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries([], dtype="object"), crs="EPSG:4269")
+    df_meta_copy = ddf._meta.copy()
+    if "Shape" in df_meta_copy.columns:
+        df_meta_copy = df_meta_copy.drop(columns=["Shape"])
+    meta_gdf = gpd.GeoDataFrame(df_meta_copy, geometry=gpd.GeoSeries([], dtype="object"), crs="EPSG:4269")
     ddf_geo = ddf.map_partitions(convert_to_gdf, meta=meta_gdf)
     ddf_geo = dask_geopandas.from_dask_dataframe(ddf_geo, geometry="geometry")
 

@@ -115,7 +115,7 @@ def post_process(run_dir, base_zoom, scheduler, clean_intermediate, cogs, config
 )
 def preprocess(input_file, output_file, partitions, scheduler):
     """
-    Preprocess AIS data (WKB -> GeoParquet -> Reproject).
+    Preprocess AIS data (GeoParquet/GPKG -> Reproject -> Spatial Partition).
     """
     run_preprocessing(input_file, output_file, partitions, scheduler)
 
