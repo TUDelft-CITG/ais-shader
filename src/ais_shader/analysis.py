@@ -160,7 +160,7 @@ def process_partition(
     S_y = (joined['y_end'] - joined['y_start']).values
     
     dot_product = S_x * (-L_y_val) + S_y * L_x_val
-    joined['direction'] = np.where(dot_product >= 0, 'up', 'down')
+    joined['direction'] = np.where(dot_product >= 0, 'down', 'up')
     
     return joined[['PassageId', 'speed', 'loc_fraction', 'direction']]
 

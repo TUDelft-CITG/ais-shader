@@ -40,11 +40,11 @@ def test_passage_crossing():
     assert not res.empty, "Should find crossings"
     assert len(res) == 2, "Should find exactly 2 crossings"
     
-    v1_res = res[res['direction'] == 'up']
-    v2_res = res[res['direction'] == 'down']
+    v1_res = res[res['direction'] == 'down']
+    v2_res = res[res['direction'] == 'up']
     
-    assert len(v1_res) == 1, "Vessel 1 should cross 'up'"
-    assert len(v2_res) == 1, "Vessel 2 should cross 'down'"
+    assert len(v1_res) == 1, "Vessel 1 should cross 'down'"
+    assert len(v2_res) == 1, "Vessel 2 should cross 'up'"
     
     # Halfway crossing should interpolate to 15.0 knots and loc_fraction to 0.5
     v1_speed = v1_res.iloc[0]['speed']
