@@ -170,3 +170,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local databases and logs
+mlflow.db
+*.log

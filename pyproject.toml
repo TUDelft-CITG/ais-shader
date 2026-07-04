@@ -24,6 +24,12 @@ dependencies = [
     "netcdf4>=1.7.3",
     "zarr>=2.18.0",
     "cmcrameri>=1.9",
+    "mlflow>=2.11.0",
+]
+
+[project.optional-dependencies]
+cgal = [
+    "pybind11>=3.0.4",
 ]
 
 [project.scripts]
@@ -34,3 +40,8 @@ packages = ["src/ais_shader"]
 
 [tool.uv]
 package = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

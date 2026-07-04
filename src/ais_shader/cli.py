@@ -188,5 +188,162 @@ def analyze_passage(passage_file, ais_dir, output_file, max_time_gap, scheduler)
     """
     run_passage_analysis(passage_file, ais_dir, output_file, max_time_gap, scheduler)
 
+
+@cli.command()
+@click.option(
+    "--input-file",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to input raw AIS Parquet directory/file.",
+)
+@click.option(
+    "--output-file",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Path to output trajectorized Parquet directory.",
+)
+@click.option(
+    "--vessel-id-col",
+    type=str,
+    default="mmsi",
+    help="Vessel identifier column name.",
+)
+@click.option(
+    "--time-col",
+    type=str,
+    default="base_date_time",
+    help="Timestamp column name.",
+)
+@click.option(
+    "--x-col",
+    type=str,
+    default="longitude",
+    help="Longitude column name.",
+)
+@click.option(
+    "--y-col",
+    type=str,
+    default="latitude",
+    help="Latitude column name.",
+)
+@click.option(
+    "--scheduler",
+    type=str,
+    default=None,
+    help="Dask scheduler URL.",
+)
+@click.option(
+    "--shuffle-backend",
+    type=click.Choice(["tasks", "p2p", "disk"]),
+    default="disk",
+    help="Shuffle backend to use for Dask.",
+)
+@click.option(
+    "--n-partitions",
+    type=int,
+    default=128,
+    help="Number of Dask partitions to split the dataset into.",
+)
+def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions):
+    """
+    Voyage segmentation and feature engineering on Dask.
+    """
+    from dask.distributed import Client
+    import dask.dataframe as dd
+    from .moving_dask.trajectory import trajectorize_dataframe
+    
+    if scheduler:
+        client = Client(scheduler)
+    else:
+        client = Client()
+        
+    try:
+        logger.info(f"Reading input from {input_file}...")
+        ddf = dd.read_parquet(input_file)
+        
+        # Run pipeline
+        res_ddf = trajectorize_dataframe(
+            ddf=ddf,
+            vessel_id_col=vessel_id_col,
+            time_col=time_col,
+            x_col=x_col,
+            y_col=y_col,
+            shuffle_backend=shuffle_backend,
+            n_partitions=n_partitions
+        )
+        
+        logger.info(f"Saving trajectorized dataset to {output_file}...")
+        res_ddf.to_parquet(output_file, overwrite=True)
+        logger.info("Trajectorization complete!")
+    finally:
+        client.close()
+
+
+@cli.command()
+@click.option(
+    "--dataset-path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to sample Parquet file/directory to benchmark.",
+)
+@click.option(
+    "--mlflow-tracking-uri",
+    type=str,
+    default="sqlite:///mlflow.db",
+    help="MLflow tracking URI.",
+)
+@click.option(
+    "--vessel-id-col",
+    type=str,
+    default="mmsi",
+    help="Vessel ID column name.",
+)
+@click.option(
+    "--time-col",
+    type=str,
+    default="base_date_time",
+    help="Time column name.",
+)
+@click.option(
+    "--x-col",
+    type=str,
+    default="longitude",
+    help="Longitude column name.",
+)
+@click.option(
+    "--y-col",
+    type=str,
+    default="latitude",
+    help="Latitude column name.",
+)
+@click.option(
+    "--runs-limit",
+    type=int,
+    default=0,
+    help="Limit number of runs in the sweep.",
+)
+@click.option(
+    "--scheduler",
+    type=str,
+    default=None,
+    help="Dask scheduler URL.",
+)
+def benchmark(dataset_path, mlflow_tracking_uri, vessel_id_col, time_col, x_col, y_col, runs_limit, scheduler):
+    """
+    Run Dask trajectorize benchmark sweeps logging to MLflow.
+    """
+    from .benchmark import run_benchmark_suite
+    run_benchmark_suite(
+        dataset_path=str(dataset_path),
+        mlflow_tracking_uri=mlflow_tracking_uri,
+        vessel_id_col=vessel_id_col,
+        time_col=time_col,
+        x_col=x_col,
+        y_col=y_col,
+        runs_limit=runs_limit,
+        scheduler=scheduler
+    )
+
+
 if __name__ == "__main__":
     cli()
