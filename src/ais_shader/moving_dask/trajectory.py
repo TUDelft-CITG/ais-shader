@@ -48,7 +48,7 @@ def process_single_vessel_partition(
     cog_col: str = 'cog',
     heading_col: str = 'heading',
     sog_col: str = 'sog',
-    coords_are_degrees: bool = True
+    input_crs: str = "EPSG:4326"
 ) -> pd.DataFrame:
     """
     Processes a pandas DataFrame partition containing one or more vessels:
@@ -63,20 +63,22 @@ def process_single_vessel_partition(
     if not pd.api.types.is_datetime64_any_dtype(df[time_col]):
         df[time_col] = pd.to_datetime(df[time_col])
 
-    # We will build list of processed vessel dataframes
-    processed_vessels = []
-    
-    # Group by vessel ID locally
-    for vid, sub_df in df.groupby(vessel_id_col, observed=True):
-        if len(sub_df) == 0:
-            continue
-            
-        # Sort chronologically
-        v_df = sub_df.sort_values(by=time_col).copy()
-        
-        # 1. Compute time differences
+    # Dynamic calculation of voyage segmentation and stop features
+    gap_threshold_seconds = gap_threshold_seconds
+    stop_duration_min = stop_duration_min
+    stop_radius_m = stop_radius_m
+
+    def process_single_vessel(v_df):
+        if len(v_df) < 2:
+            v_df['time_diff_s'] = np.nan
+            v_df['rolling_area_m2'] = 0.0
+            v_df['trip_id'] = v_df[vessel_id_col].astype(str) + "_1"
+            return v_df
+
+        # 1. Sort chronologically
+        v_df = v_df.sort_values(by=time_col)
         v_df['time_diff_s'] = v_df[time_col].diff().dt.total_seconds()
-        
+
         # 2. Compute rolling convex hull area for stop detection
         coords = v_df[[x_col, y_col]].values
         times = v_df[time_col].values.astype('datetime64[ns]')
@@ -85,12 +87,13 @@ def process_single_vessel_partition(
         # Binary search for window start indices
         starts = np.searchsorted(times, times - window_ns, side='left')
         
-        if coords_are_degrees:
-            from pyproj import Transformer
+        from pyproj import CRS, Transformer
+        crs_obj = CRS(input_crs)
+        if crs_obj.is_geographic:
             # Use Azimuthal Equidistant projection centered on the first coordinate
             lon0, lat0 = coords[0, 0], coords[0, 1]
             proj_str = f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
-            transformer = Transformer.from_crs("EPSG:4326", proj_str, always_xy=True)
+            transformer = Transformer.from_crs(crs_obj, proj_str, always_xy=True)
             x_proj, y_proj = transformer.transform(coords[:, 0], coords[:, 1])
             planar_coords = np.column_stack((x_proj, y_proj))
         else:
@@ -129,8 +132,15 @@ def process_single_vessel_partition(
             processed_trips.append(trip_df)
             
         if processed_trips:
-            processed_vessels.append(pd.concat(processed_trips))
-            
+            return pd.concat(processed_trips)
+        return v_df
+
+    processed_vessels = []
+    for vid, sub_df in df.groupby(vessel_id_col, observed=True):
+        if len(sub_df) == 0:
+            continue
+        processed_vessels.append(process_single_vessel(sub_df.copy()))
+        
     if processed_vessels:
         return pd.concat(processed_vessels)
     return pd.DataFrame(columns=df.columns)
@@ -149,7 +159,7 @@ def trajectorize_dataframe(
     stop_radius_m: float = 50.0,
     shuffle_backend: str = "tasks",
     n_partitions: int = 128,
-    coords_are_degrees: bool = True
+    input_crs: str = "EPSG:4326"
 ) -> dd.DataFrame:
     """
     Dask-compatible entrypoint to perform voyage segmentation and feature engineering.
@@ -193,7 +203,7 @@ def trajectorize_dataframe(
         cog_col=cog_col,
         heading_col=heading_col,
         sog_col=sog_col,
-        coords_are_degrees=coords_are_degrees,
+        input_crs=input_crs,
         meta=meta
     )
     

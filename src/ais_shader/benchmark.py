@@ -132,7 +132,8 @@ def run_benchmark_suite(
     x_col: str,
     y_col: str,
     runs_limit: int,
-    scheduler: str = None
+    scheduler: str = None,
+    tmp_dir: str = None
 ):
     """Runs a parameter sweep of sorting/grouping strategies and logs them to MLflow."""
     # Set MLflow tracking URI
@@ -140,15 +141,17 @@ def run_benchmark_suite(
     mlflow.set_experiment("MovingDask_Benchmarking")
 
     # Set Dask temporary directory to fast scratch disk if available
-    user = os.getenv("USER", "default")
-    cache_dir = f"/scratch-shared/{user}/cache"
+    if not tmp_dir:
+        import tempfile
+        tmp_dir = os.getenv("TMPDIR", tempfile.gettempdir())
+        
     try:
-        os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(tmp_dir, exist_ok=True)
         import dask
-        dask.config.set({"temporary-directory": cache_dir})
-        logger.info(f"Dask temporary directory set to: {cache_dir}")
+        dask.config.set({"temporary-directory": str(tmp_dir)})
+        logger.info(f"Dask temporary directory set to: {tmp_dir}")
     except Exception as e:
-        logger.warning(f"Could not set Dask temporary directory to {cache_dir}: {e}")
+        logger.warning(f"Could not set Dask temporary directory to {tmp_dir}: {e}")
 
     # Connect to Dask
     if scheduler:

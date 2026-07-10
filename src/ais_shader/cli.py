@@ -277,11 +277,12 @@ def analyze_passage(passage_file, ais_dir, output_file, max_time_gap, scheduler)
     help="Maximum time gap in hours to segment trips.",
 )
 @click.option(
-    "--coords-are-degrees/--coords-are-planar",
-    default=True,
-    help="Whether input coordinates are lon/lat in degrees or planar meters.",
+    "--input-crs",
+    type=str,
+    default="EPSG:4326",
+    help="Coordinate reference system of the input coordinates.",
 )
-def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions, coords_are_degrees, gap_threshold_hours):
+def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions, input_crs, gap_threshold_hours):
     """
     Voyage segmentation and feature engineering on Dask.
     """
@@ -313,7 +314,7 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
             gap_threshold_hours=gap_threshold_hours,
             shuffle_backend=shuffle_backend,
             n_partitions=n_partitions,
-            coords_are_degrees=coords_are_degrees
+            input_crs=input_crs
         )
         
         logger.info(f"Saving trajectorized dataset to {output_file}...")
@@ -372,7 +373,13 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
     default=None,
     help="Dask scheduler URL.",
 )
-def benchmark(dataset_path, mlflow_tracking_uri, vessel_id_col, time_col, x_col, y_col, runs_limit, scheduler):
+@click.option(
+    "--tmp-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Dask temporary cache directory.",
+)
+def benchmark(dataset_path, mlflow_tracking_uri, vessel_id_col, time_col, x_col, y_col, runs_limit, scheduler, tmp_dir):
     """
     Run Dask trajectorize benchmark sweeps logging to MLflow.
     """
@@ -385,7 +392,8 @@ def benchmark(dataset_path, mlflow_tracking_uri, vessel_id_col, time_col, x_col,
         x_col=x_col,
         y_col=y_col,
         runs_limit=runs_limit,
-        scheduler=scheduler
+        scheduler=scheduler,
+        tmp_dir=str(tmp_dir) if tmp_dir else None
     )
 
 
