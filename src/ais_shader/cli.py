@@ -383,7 +383,7 @@ def benchmark(dataset_path, mlflow_tracking_uri, vessel_id_col, time_col, x_col,
     """
     Run Dask trajectorize benchmark sweeps logging to MLflow.
     """
-    from .benchmark import run_benchmark_suite
+    from tests.benchmark import run_benchmark_suite
     run_benchmark_suite(
         dataset_path=str(dataset_path),
         mlflow_tracking_uri=mlflow_tracking_uri,

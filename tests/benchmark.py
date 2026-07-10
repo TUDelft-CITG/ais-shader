@@ -8,7 +8,7 @@ import dask.dataframe as dd
 from dask.distributed import Client
 import mlflow
 
-from .moving_dask.trajectory import trajectorize_dataframe
+from ais_shader.moving_dask.trajectory import trajectorize_dataframe
 
 logger = logging.getLogger(__name__)
 

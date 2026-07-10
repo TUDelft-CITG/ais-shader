@@ -35,8 +35,12 @@ cgal = [
 [project.scripts]
 ais-shader = "ais_shader.cli:cli"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/ais_shader"]
+[build-system]
+requires = ["setuptools>=61.0.0", "pybind11>=2.10.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.uv]
 package = true

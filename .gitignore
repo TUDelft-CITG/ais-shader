@@ -176,4 +176,4 @@ mlflow.db
 *.log
 
 # Snellius local test runners
-snellius/process_rws.sh
+scripts/snellius/process_rws.sh
