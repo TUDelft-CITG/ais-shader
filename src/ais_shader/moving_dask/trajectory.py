@@ -2,8 +2,6 @@ import logging
 import numpy as np
 import pandas as pd
 import dask.dataframe as dd
-from pyproj import Geod
-from shapely.geometry import Polygon
 
 try:
     from .. import _cgal_hull
@@ -13,28 +11,12 @@ except ImportError:
 from .features import calculate_kinematic_features_pandas
 
 logger = logging.getLogger(__name__)
-geod = Geod(ellps="WGS84")
 
-def _calculate_rolling_hull_area(points_array, planar=False):
-    """Calculates the area of the convex hull for a set of points.
-    If planar=True, points_array is in planar meters, and we compute the planar area.
-    If planar=False, points_array is in lon/lat, and we compute geodesic area.
-    This version requires CGAL and will raise exceptions on failure.
-    """
+def _calculate_rolling_hull_area(points_array):
+    """Calculates the area of the convex hull for a set of planar points (in meters) using CGAL."""
     if len(points_array) < 3:
         return 0.0
-    
-    if planar:
-        area = _cgal_hull.convex_hull_area_2(points_array)
-        return area
-            
-    # Geodesic area using CGAL
-    hull_coords = _cgal_hull.convex_hull_2(points_array)
-    if len(hull_coords) < 3:
-        return 0.0
-    hull = Polygon(hull_coords)
-    area, _ = geod.geometry_area_perimeter(hull)
-    return abs(area)
+    return _cgal_hull.convex_hull_area_2(points_array)
 
 def process_single_vessel_partition(
     df: pd.DataFrame,
