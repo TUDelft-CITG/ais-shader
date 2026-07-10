@@ -28,8 +28,6 @@ def main():
     
     data_dir = Path(args.data_dir)
     tracks_path = data_dir / 'trajectorized_lines.geoparquet'
-    if not tracks_path.exists():
-        tracks_path = data_dir / 'trajectorized_lines.parquet'
     
     epoch_points_path = data_dir / 'trajectorized_epochs.geoparquet'
     rt_segments_path = data_dir / 'trajectorized_segments.geoparquet'
@@ -120,9 +118,7 @@ def main():
         (epoch_points_path, "parquet"),
         (rt_segments_path, "parquet"),
         (epoch_segments_path, "parquet"),
-        (data_dir / 'trajectorized_lines.geoparquet', "parquet"),
-        (data_dir / 'trajectorized_lines.parquet', "parquet"),
-        (data_dir / 'trajectorized_lines.gpkg', "gpkg")
+        (data_dir / 'trajectorized_lines.geoparquet', "parquet")
     ]
     
     for file_path, file_type in target_files:

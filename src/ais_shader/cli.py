@@ -397,24 +397,16 @@ def benchmark(dataset_path, mlflow_tracking_uri, vessel_id_col, time_col, x_col,
     help="Path to trajectorized point parquet file.",
 )
 @click.option(
-    "--output-gpkg",
+    "--output-file",
     type=click.Path(path_type=Path),
-    default=None,
-    help="Path to output GeoPackage file.",
+    required=True,
+    help="Path to output GeoParquet file.",
 )
-@click.option(
-    "--output-parquet",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Path to output Parquet file.",
-)
-def generate_lines(input_file, output_gpkg, output_parquet):
+def generate_lines(input_file, output_file):
     """
     Aggregate points to LineString/MultiLineString trajectories matching Marine Cadastre schema.
     """
-    if not output_gpkg and not output_parquet:
-        raise click.UsageError("At least one of --output-gpkg or --output-parquet must be specified.")
-    run_linestring_generation(input_file, output_gpkg, output_parquet)
+    run_linestring_generation(input_file, output_file)
 
 
 @cli.command()

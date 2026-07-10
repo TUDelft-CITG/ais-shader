@@ -1,8 +1,6 @@
 import logging
 import time
 import os
-if "MLFLOW_ALLOW_FILE_STORE" not in os.environ:
-    os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
 import threading
 import psutil
 import pandas as pd

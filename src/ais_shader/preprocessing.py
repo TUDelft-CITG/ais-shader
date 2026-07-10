@@ -229,9 +229,9 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
         client.close()
 
 
-def run_linestring_generation(input_file: Path, output_gpkg: Path, output_parquet: Path):
+def run_linestring_generation(input_file: Path, output_file: Path):
     """
-    Aggregate point pings from trajectorized parquet into LineStrings/MultiLineStrings GPKG and Parquet.
+    Aggregate point pings from trajectorized parquet into LineString GeoParquet.
     """
     from shapely.geometry import LineString, MultiLineString
     import numpy as np
@@ -317,16 +317,10 @@ def run_linestring_generation(input_file: Path, output_gpkg: Path, output_parque
     
     gdf_lines = gpd.GeoDataFrame(df_attrs, geometry=geoms, crs="EPSG:4326")
     
-    if output_gpkg:
-        output_gpkg.parent.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Saving to GeoPackage: {output_gpkg}...")
-        gdf_lines.to_file(output_gpkg, driver="GPKG", layer="vessel_tracks")
-        
-    if output_parquet:
-        output_parquet.parent.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Saving to Parquet: {output_parquet}...")
-        gdf_lines.to_parquet(output_parquet)
-        
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Saving GeoParquet to: {output_file}...")
+    gdf_lines.to_parquet(output_file)
+    
     logger.info("Line generation complete!")
 
 

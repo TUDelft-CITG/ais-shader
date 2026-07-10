@@ -10,7 +10,6 @@ DATA_DIR="/scratch-shared/${USER_NAME}/data/rws"
 echo "==> Generating track linestrings from trajectorized points..."
 uv run ais-shader generate-lines \
     --input-file "$DATA_DIR/trajectorized.parquet" \
-    --output-gpkg "$DATA_DIR/trajectorized_lines.gpkg" \
-    --output-parquet "$DATA_DIR/trajectorized_lines.geoparquet"
+    --output-file "$DATA_DIR/trajectorized_lines.geoparquet"
 
 echo "==> Track linestring generation complete!"
