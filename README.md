@@ -14,6 +14,8 @@ A scalable Python pipeline to visualize AIS vessel tracks from large Parquet dat
 - **Dual Formats**: Exports both **PNG** (for display) and **Cloud Optimized GeoTIFF (COG)** (for analysis).
 - **Anti-Aliasing**: Renders tracks as smooth lines (`LineString`) with anti-aliasing.
 - **Configurable**: All settings (bbox, zoom, palette) are defined in `config.toml`.
+- **Dynamic AEQD Local Projection**: During stop-detection and trajectorization, the pipeline inspects the dataset's CRS. If geographic coordinates (e.g. degrees in `EPSG:4326`) are provided, it dynamically projects them to a local **Azimuthal Equidistant (AEQD)** projection centered on the first ping of each track. This guarantees exact local distance (meters) and area (square meters) math for C++ CGAL rolling convex hull and flat-earth Shoelace calculations without handcoded approximations.
+
 
 ## Visuals
 
