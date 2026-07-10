@@ -14,6 +14,8 @@ A scalable Python pipeline to visualize AIS vessel tracks from large Parquet dat
 - **Dual Formats**: Exports both **PNG** (for display) and **Cloud Optimized GeoTIFF (COG)** (for analysis).
 - **Anti-Aliasing**: Renders tracks as smooth lines (`LineString`) with anti-aliasing.
 - **Configurable**: All settings (bbox, zoom, palette) are defined in `config.toml`.
+- **Dynamic AEQD Local Projection**: During stop-detection and trajectorization, the pipeline inspects the dataset's CRS. If geographic coordinates (e.g. degrees in `EPSG:4326`) are provided, it dynamically projects them to a local **Azimuthal Equidistant (AEQD)** projection centered on the first ping of each track. This guarantees exact local distance (meters) and area (square meters) math for C++ CGAL rolling convex hull and flat-earth Shoelace calculations without handcoded approximations.
+
 
 ## Visuals
 
@@ -50,10 +52,32 @@ zip -FF AISVesselTracks2024.zip --out AISVesselTracks2024-fixed.zip
 
 This project uses `uv` for dependency management.
 
+### System Prerequisites
+To build the compiled CGAL C++ convex hull extension, you need development libraries for **CGAL, Boost, GMP, and MPFR** installed on your system:
+
+* **Ubuntu / Debian**:
+  ```bash
+  sudo apt-get install libcgal-dev libboost-dev libgmp-dev libmpfr-dev
+  ```
+* **macOS** (using Homebrew):
+  ```bash
+  brew install cgal boost gmp mpfr
+  ```
+* **Snellius (HPC)**:
+  ```bash
+  module load 2025 CGAL Boost GMP MPFR
+  ```
+
+### Build & Install
+Install the dependencies and compile the C++ extension in editable mode:
 ```bash
-# Install dependencies
+# Sync python dependencies
 uv sync
+
+# Compile the C++ extension and install the package
+uv pip install -e .
 ```
+*(Alternatively, run `bash compile_and_test.sh` to compile the extensions and run the full test suite).*
 
 ## Usage
 

@@ -24,13 +24,29 @@ dependencies = [
     "netcdf4>=1.7.3",
     "zarr>=2.18.0",
     "cmcrameri>=1.9",
+    "mlflow>=2.11.0",
+]
+
+[project.optional-dependencies]
+cgal = [
+    "pybind11>=3.0.4",
 ]
 
 [project.scripts]
 ais-shader = "ais_shader.cli:cli"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/ais_shader"]
+[build-system]
+requires = ["setuptools>=61.0.0", "pybind11>=2.10.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.uv]
 package = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "psutil",
+]

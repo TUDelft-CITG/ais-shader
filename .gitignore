@@ -170,3 +170,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local databases and logs
+mlflow.db
+*.log
+
+# Snellius local test runners
+scripts/snellius/process_rws.sh

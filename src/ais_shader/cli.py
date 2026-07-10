@@ -7,7 +7,7 @@ import tomllib
 # Import from src modules
 from .renderer import run_rendering
 from .postprocessing import run_post_processing
-from .preprocessing import run_preprocessing, run_wkb_conversion
+from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_linestring_generation, run_epoch_and_segment_generation
 from .analysis import run_passage_analysis
 
 # Configure logging
@@ -153,15 +153,41 @@ def convert_wkb(input_file, output_file, partitions, scheduler):
 
 @cli.command()
 @click.option(
+    "--input-file",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to input NDJSON file.",
+)
+@click.option(
+    "--output-file",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Path to output GeoParquet file.",
+)
+@click.option(
+    "--scheduler",
+    type=str,
+    default=None,
+    help="Address of the Dask scheduler. If None, starts a local cluster.",
+)
+def convert_ndjson(input_file, output_file, scheduler):
+    """
+    Convert an NDJSON file to a standard flat GeoParquet file using Dask Bag.
+    """
+    run_ndjson_conversion(input_file, output_file, scheduler)
+
+
+@cli.command()
+@click.option(
     "--passage-file",
     type=click.Path(exists=True, path_type=Path),
-    default=Path("/scratch-shared/fbaart/data/euris-export/PassageLine_NL_20260224.geojson"),
+    required=True,
     help="Path to the passage line GeoJSON file.",
 )
 @click.option(
     "--ais-dir",
     type=click.Path(exists=True, path_type=Path),
-    default=Path("/scratch-shared/fbaart/data/ais_data/20260430-2093161291.8-anonymous1-Noordzee_2025_01_TUD.parquet"),
+    required=True,
     help="Path to the AIS Parquet directory.",
 )
 @click.option(
@@ -187,6 +213,165 @@ def analyze_passage(passage_file, ais_dir, output_file, max_time_gap, scheduler)
     Compute velocities along passage lines using AIS parquet files.
     """
     run_passage_analysis(passage_file, ais_dir, output_file, max_time_gap, scheduler)
+
+
+@cli.command()
+@click.option(
+    "--input-file",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to input raw AIS Parquet directory/file.",
+)
+@click.option(
+    "--output-file",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Path to output trajectorized Parquet directory.",
+)
+@click.option(
+    "--vessel-id-col",
+    type=str,
+    default="mmsi",
+    help="Vessel identifier column name.",
+)
+@click.option(
+    "--time-col",
+    type=str,
+    default="base_date_time",
+    help="Timestamp column name.",
+)
+@click.option(
+    "--x-col",
+    type=str,
+    default="longitude",
+    help="Longitude column name.",
+)
+@click.option(
+    "--y-col",
+    type=str,
+    default="latitude",
+    help="Latitude column name.",
+)
+@click.option(
+    "--scheduler",
+    type=str,
+    default=None,
+    help="Dask scheduler URL.",
+)
+@click.option(
+    "--shuffle-backend",
+    type=click.Choice(["tasks", "p2p", "disk"]),
+    default="disk",
+    help="Shuffle backend to use for Dask.",
+)
+@click.option(
+    "--n-partitions",
+    type=int,
+    default=128,
+    help="Number of Dask partitions to split the dataset into.",
+)
+@click.option(
+    "--gap-threshold-hours",
+    type=float,
+    default=1.0,
+    help="Maximum time gap in hours to segment trips.",
+)
+@click.option(
+    "--input-crs",
+    type=str,
+    default="EPSG:4326",
+    help="Coordinate reference system of the input coordinates.",
+)
+def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions, input_crs, gap_threshold_hours):
+    """
+    Voyage segmentation and feature engineering on Dask.
+    """
+    from dask.distributed import Client
+    import dask.dataframe as dd
+    from .moving_dask.trajectory import trajectorize_dataframe
+    
+    if scheduler:
+        client = Client(scheduler)
+    else:
+        client = Client()
+        
+    try:
+        logger.info(f"Reading input from {input_file}...")
+        try:
+            import dask_geopandas
+            ddf = dask_geopandas.read_parquet(input_file)
+        except Exception:
+            logger.info("Failed to read with dask_geopandas, falling back to standard dask dataframe...")
+            ddf = dd.read_parquet(input_file)
+        
+        # Run pipeline
+        res_ddf = trajectorize_dataframe(
+            ddf=ddf,
+            vessel_id_col=vessel_id_col,
+            time_col=time_col,
+            x_col=x_col,
+            y_col=y_col,
+            gap_threshold_hours=gap_threshold_hours,
+            shuffle_backend=shuffle_backend,
+            n_partitions=n_partitions,
+            input_crs=input_crs
+        )
+        
+        logger.info(f"Saving trajectorized dataset to {output_file}...")
+        res_ddf.to_parquet(output_file, overwrite=True)
+        logger.info("Trajectorization complete!")
+    finally:
+        client.close()
+
+
+
+
+
+@cli.command()
+@click.option(
+    "--input-file",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to trajectorized point parquet file.",
+)
+@click.option(
+    "--output-file",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Path to output GeoParquet file.",
+)
+@click.option(
+    "--vessel-codes-json",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to JSON mapping file for vessel type classification.",
+)
+def generate_lines(input_file, output_file, vessel_codes_json):
+    """
+    Aggregate points to LineString/MultiLineString trajectories matching Marine Cadastre schema.
+    """
+    run_linestring_generation(input_file, output_file, vessel_codes_json)
+
+
+@cli.command()
+@click.option(
+    "--input-file",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to trajectorized point parquet file.",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Directory to save the epoch-normalized and segment GeoParquet datasets.",
+)
+def generate_epochs(input_file, output_dir):
+    """
+    Generate epoch-normalized point trajectories and point-pair line segments.
+    """
+    run_epoch_and_segment_generation(input_file, output_dir)
+
 
 if __name__ == "__main__":
     cli()

@@ -4,8 +4,14 @@ from shapely.geometry import LineString
 from pathlib import Path
 
 def main():
-    input_path = Path("/scratch-shared/fbaart/data/PassageLine_NL_velocities.geojson")
-    output_path = Path("/scratch-shared/fbaart/data/PassageLine_NL_bin_segments.geojson")
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate flattened bin segments from passage velocities.")
+    parser.add_argument("--input-file", type=str, default="data/PassageLine_NL_velocities.geojson", help="Path to input velocities GeoJSON.")
+    parser.add_argument("--output-file", type=str, default="data/PassageLine_NL_bin_segments.geojson", help="Path to output GeoJSON.")
+    args = parser.parse_args()
+    
+    input_path = Path(args.input_file)
+    output_path = Path(args.output_file)
     
     print(f"Loading velocities GeoJSON from {input_path}...")
     gdf = gpd.read_file(input_path)
