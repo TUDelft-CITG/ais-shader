@@ -6,7 +6,9 @@ set -euo pipefail
 
 USER_NAME=${USER:-fbaart}
 DATA_DIR="/scratch-shared/${USER_NAME}/data/rws"
-VESSEL_CODES="/home/${USER_NAME}/src/openvts/test-data/vts-vessel-codes-expanded.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+VESSEL_CODES="$REPO_DIR/resources/vessel_groups.json"
 
 echo "==> Generating track linestrings from trajectorized points..."
 if [ -f "$VESSEL_CODES" ]; then

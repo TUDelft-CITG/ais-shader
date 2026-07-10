@@ -174,3 +174,6 @@ __marimo__/
 # Local databases and logs
 mlflow.db
 *.log
+
+# Snellius local test runners
+snellius/process_rws.sh
