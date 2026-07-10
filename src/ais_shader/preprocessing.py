@@ -229,9 +229,9 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
         client.close()
 
 
-def run_linestring_generation(input_file: Path, output_file: Path):
+def run_linestring_generation(input_file: Path, output_file: Path, vessel_codes_json: Path = None):
     """
-    Aggregate point pings from trajectorized parquet into LineString GeoParquet.
+    Aggregate point pings from trajectorized parquet into LineString GeoParquet with optional vessel codes config.
     """
     from shapely.geometry import LineString, MultiLineString
     import numpy as np
@@ -288,6 +288,33 @@ def run_linestring_generation(input_file: Path, output_file: Path):
     durations = (df_attrs['TrackEndTime'] - df_attrs['TrackStartTime']).dt.total_seconds() / 60.0
     df_attrs['DurationMinutes'] = durations.round().astype(int)
     
+    vessel_mapping = {}
+    if vessel_codes_json and Path(vessel_codes_json).exists():
+        import json
+        try:
+            logger.info(f"Loading vessel codes mapping from: {vessel_codes_json}...")
+            with open(vessel_codes_json, "r") as f:
+                data = json.load(f)
+                for item in data:
+                    code = item.get("vessel_code")
+                    group = item.get("vessel_group")
+                    if code is not None and group is not None:
+                        try:
+                            vessel_mapping[int(float(code))] = group
+                        except (ValueError, TypeError):
+                            if isinstance(code, str) and " to " in code:
+                                parts = code.split(" to ")
+                                if len(parts) == 2:
+                                    try:
+                                        start = int(float(parts[0]))
+                                        end = int(float(parts[1]))
+                                        for c in range(start, end + 1):
+                                            vessel_mapping[c] = group
+                                    except Exception:
+                                        pass
+        except Exception as e:
+            logger.warning(f"Failed to load vessel codes JSON: {e}")
+
     def get_vessel_group(shiptype):
         if not shiptype:
             return "Other"
@@ -295,6 +322,9 @@ def run_linestring_generation(input_file: Path, output_file: Path):
             code = int(float(shiptype))
         except (ValueError, TypeError):
             return "Other"
+            
+        if code in vessel_mapping:
+            return vessel_mapping[code]
             
         if code == 30:
             return "Fishing"

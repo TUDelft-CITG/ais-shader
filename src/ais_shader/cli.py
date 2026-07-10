@@ -402,11 +402,17 @@ def benchmark(dataset_path, mlflow_tracking_uri, vessel_id_col, time_col, x_col,
     required=True,
     help="Path to output GeoParquet file.",
 )
-def generate_lines(input_file, output_file):
+@click.option(
+    "--vessel-codes-json",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to JSON mapping file for vessel type classification.",
+)
+def generate_lines(input_file, output_file, vessel_codes_json):
     """
     Aggregate points to LineString/MultiLineString trajectories matching Marine Cadastre schema.
     """
-    run_linestring_generation(input_file, output_file)
+    run_linestring_generation(input_file, output_file, vessel_codes_json)
 
 
 @cli.command()
