@@ -33,7 +33,7 @@ sleep 10
 
 # 3. Run the MLflow benchmark sweep script
 echo "Launching MLflow benchmark sweep..."
-uv run ais-shader benchmark \
+uv run python tests/run_benchmark.py \
     --scheduler ${SCHEDULER_URL} \
     --dataset-path /projects/prjs2131/data/marine-cadastre/ais_2025_12/ais-2025-12-01.parquet \
     --mlflow-tracking-uri sqlite:///mlflow.db
