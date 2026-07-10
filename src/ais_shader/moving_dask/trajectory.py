@@ -86,11 +86,12 @@ def process_single_vessel_partition(
         starts = np.searchsorted(times, times - window_ns, side='left')
         
         if coords_are_degrees:
-            # Fast local projection (Equirectangular approximation centered on the first ping)
-            rad_pts = np.radians(coords)
-            cos_lat0 = np.cos(rad_pts[0, 1])
-            x_proj = 6371000.0 * (rad_pts[:, 0] - rad_pts[0, 0]) * cos_lat0
-            y_proj = 6371000.0 * (rad_pts[:, 1] - rad_pts[0, 1])
+            from pyproj import Transformer
+            # Use Azimuthal Equidistant projection centered on the first coordinate
+            lon0, lat0 = coords[0, 0], coords[0, 1]
+            proj_str = f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+            transformer = Transformer.from_crs("EPSG:4326", proj_str, always_xy=True)
+            x_proj, y_proj = transformer.transform(coords[:, 0], coords[:, 1])
             planar_coords = np.column_stack((x_proj, y_proj))
         else:
             planar_coords = coords
