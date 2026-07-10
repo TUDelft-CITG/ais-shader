@@ -23,9 +23,6 @@ g++ -O3 -Wall -shared -std=c++17 -fPIC \
     -o src/ais_shader/_cgal_hull${EXT_SUFFIX}
 
 echo "==> Running pytests..."
-uv run pytest tests/test_moving_dask.py
-
-echo "==> Running micro-benchmarks..."
-uv run python /home/fbaart/.gemini/antigravity-cli/brain/e6d12f55-d77d-4260-b648-4c438aac1e89/scratch/test_cgal_hull.py
+uv run pytest tests/
 
 echo "==> Build and verification complete!"

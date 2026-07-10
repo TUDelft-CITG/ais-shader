@@ -103,12 +103,21 @@ py::array_t<double> rolling_convex_hull_area_2(
         throw std::runtime_error("size of starts must match size of xy");
     }
 
+    // Check bounds before releasing GIL to prevent python crash
+    for (ssize_t i = 0; i < n; ++i) {
+        if (starts_ptr[i] < 0 || starts_ptr[i] > i) {
+            throw std::runtime_error("Invalid start index: starts[" + std::to_string(i) + "] = " + std::to_string(starts_ptr[i]) + " is out of bounds [0, " + std::to_string(i) + "].");
+        }
+    }
+
     auto result = py::array_t<double>(n);
     auto result_buf = result.request();
     double* res_ptr = static_cast<double*>(result_buf.ptr);
 
     {
         py::gil_scoped_release release;
+        std::vector<Point_2> points;
+        std::vector<Point_2> hull;
         for (ssize_t i = 0; i < n; ++i) {
             ssize_t j = starts_ptr[i];
             ssize_t count = i - j + 1;
@@ -117,13 +126,13 @@ py::array_t<double> rolling_convex_hull_area_2(
                 continue;
             }
 
-            std::vector<Point_2> points;
+            points.clear();
             points.reserve(count);
             for (ssize_t k = j; k <= i; ++k) {
                 points.emplace_back(xy_ptr[2 * k], xy_ptr[2 * k + 1]);
             }
 
-            std::vector<Point_2> hull;
+            hull.clear();
             CGAL::convex_hull_2(points.begin(), points.end(), std::back_inserter(hull));
             res_ptr[i] = shoelace_area(hull);
         }

@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import dask.dataframe as dd
 from pyproj import Geod
-from shapely.geometry import MultiPoint, Polygon
+from shapely.geometry import Polygon
 
 try:
     from .. import _cgal_hull
@@ -47,7 +47,8 @@ def process_single_vessel_partition(
     stop_radius_m: float,
     cog_col: str = 'cog',
     heading_col: str = 'heading',
-    sog_col: str = 'sog'
+    sog_col: str = 'sog',
+    coords_are_degrees: bool = True
 ) -> pd.DataFrame:
     """
     Processes a pandas DataFrame partition containing one or more vessels:
@@ -79,21 +80,12 @@ def process_single_vessel_partition(
         # 2. Compute rolling convex hull area for stop detection
         coords = v_df[[x_col, y_col]].values
         times = v_df[time_col].values.astype('datetime64[ns]')
-        window_ns = np.timedelta64(int(stop_duration_min * 60), 's')
+        window_ns = np.timedelta64(int(round(stop_duration_min * 60)), 's')
         
         # Binary search for window start indices
         starts = np.searchsorted(times, times - window_ns, side='left')
         
-        # Check if coordinates are in degrees (WGS84) or already projected planar meters
-        # Lon/lat values will typically reside within [-180, 180] and [-90, 90] respectively.
-        is_deg = False
-        if len(coords) > 0:
-            c_min = coords.min(axis=0)
-            c_max = coords.max(axis=0)
-            is_deg = (c_min[0] >= -180.0 and c_max[0] <= 180.0 and 
-                      c_min[1] >= -90.0 and c_max[1] <= 90.0)
-        
-        if is_deg:
+        if coords_are_degrees:
             # Fast local projection (Equirectangular approximation centered on the first ping)
             rad_pts = np.radians(coords)
             cos_lat0 = np.cos(rad_pts[0, 1])
@@ -155,7 +147,8 @@ def trajectorize_dataframe(
     stop_duration_min: float = 20.0,
     stop_radius_m: float = 50.0,
     shuffle_backend: str = "tasks",
-    n_partitions: int = 128
+    n_partitions: int = 128,
+    coords_are_degrees: bool = True
 ) -> dd.DataFrame:
     """
     Dask-compatible entrypoint to perform voyage segmentation and feature engineering.
@@ -179,6 +172,11 @@ def trajectorize_dataframe(
     meta['turn_rate_from_cog'] = pd.Series(dtype='float64')
     meta['turn_rate_from_heading'] = pd.Series(dtype='float64')
 
+    if 'geometry' in meta.columns:
+        import geopandas as gpd
+        crs = getattr(ddf, 'crs', None)
+        meta = gpd.GeoDataFrame(meta, geometry='geometry', crs=crs)
+
     logger.info("Applying partition-wise stop detection, segmentation, and feature engineering...")
     gap_threshold_seconds = gap_threshold_hours * 3600.0
     
@@ -194,6 +192,7 @@ def trajectorize_dataframe(
         cog_col=cog_col,
         heading_col=heading_col,
         sog_col=sog_col,
+        coords_are_degrees=coords_are_degrees,
         meta=meta
     )
     

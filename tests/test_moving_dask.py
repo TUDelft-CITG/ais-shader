@@ -78,7 +78,7 @@ def test_calculate_rolling_hull_area():
 
 def test_trajectorize_dataframe():
     # Start Dask Local Cluster for test
-    client = Client(n_workers=1, threads_per_worker=1)
+    client = Client(asynchronous=False, dashboard_address=None, processes=False, n_workers=1, threads_per_worker=1)
     
     try:
         # Create a small dataset with 2 vessels

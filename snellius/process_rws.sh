@@ -1,0 +1,27 @@
+#!/bin/bash
+# snellius/process_rws.sh
+# Processes the RWS NDJSON dataset: converts to GeoParquet, preprocesses (reprojects and partitions), and trajectorizes.
+
+set -euo pipefail
+
+echo "==> Loading modules..."
+module load 2025 CGAL/6.0.1-GCCcore-14.2.0 Boost/1.88.0-GCC-14.2.0 GMP/6.3.0-GCCcore-14.2.0 MPFR/4.2.2-GCCcore-14.2.0
+
+echo "==> Step 1: Converting NDJSON to flat GeoParquet..."
+uv run ais-shader convert-ndjson \
+    --input-file /scratch-shared/fbaart/data/ais_data/20260704-2098787588.3-anonymous1-Parken_67.ndjson \
+    --output-file /scratch-shared/fbaart/data/rws/flat.parquet
+
+echo "==> Step 2: Preprocessing GeoParquet (reproject to EPSG:3857 and spatially partition)..."
+uv run ais-shader preprocess \
+    --input-file /scratch-shared/fbaart/data/rws/flat.parquet \
+    --output-file /scratch-shared/fbaart/data/rws/processed.parquet
+
+echo "==> Step 3: Trajectorizing preprocessed dataset (voyage segmentation & features)..."
+uv run ais-shader trajectorize \
+    --input-file /scratch-shared/fbaart/data/rws/processed.parquet \
+    --output-file /scratch-shared/fbaart/data/rws/trajectorized.parquet \
+    --coords-are-degrees \
+    --gap-threshold-hours 0.333333
+
+echo "==> All steps completed successfully!"

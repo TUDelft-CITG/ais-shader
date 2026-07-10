@@ -1,10 +1,10 @@
 import logging
 import time
 import os
-os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
+if "MLFLOW_ALLOW_FILE_STORE" not in os.environ:
+    os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
 import threading
 import psutil
-import click
 import pandas as pd
 import dask.dataframe as dd
 from dask.distributed import Client
