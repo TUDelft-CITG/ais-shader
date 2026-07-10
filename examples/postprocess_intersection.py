@@ -15,10 +15,18 @@ import geopandas as gpd
 import pandas as pd
 from pathlib import Path
 import json
+import argparse
+import getpass
 
 def main():
-    # Define directories and input/output paths
-    data_dir = Path('/scratch-shared/fbaart/data/rws')
+    user = getpass.getuser()
+    default_dir = f"/scratch-shared/{user}/data/rws"
+    
+    parser = argparse.ArgumentParser(description="Postprocess track intersections with gates and REST layers.")
+    parser.add_argument("--data-dir", type=str, default=default_dir, help="Directory containing the datasets.")
+    args = parser.parse_args()
+    
+    data_dir = Path(args.data_dir)
     tracks_path = data_dir / 'trajectorized_lines.geoparquet'
     if not tracks_path.exists():
         tracks_path = data_dir / 'trajectorized_lines.parquet'
