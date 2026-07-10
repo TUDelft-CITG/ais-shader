@@ -140,7 +140,8 @@ def run_benchmark_suite(
     mlflow.set_experiment("MovingDask_Benchmarking")
 
     # Set Dask temporary directory to fast scratch disk if available
-    cache_dir = "/scratch-shared/fbaart/cache"
+    user = os.getenv("USER", "default")
+    cache_dir = f"/scratch-shared/{user}/cache"
     try:
         os.makedirs(cache_dir, exist_ok=True)
         import dask

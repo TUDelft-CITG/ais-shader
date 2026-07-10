@@ -181,13 +181,13 @@ def convert_ndjson(input_file, output_file, scheduler):
 @click.option(
     "--passage-file",
     type=click.Path(exists=True, path_type=Path),
-    default=Path("/scratch-shared/fbaart/data/euris-export/PassageLine_NL_20260224.geojson"),
+    required=True,
     help="Path to the passage line GeoJSON file.",
 )
 @click.option(
     "--ais-dir",
     type=click.Path(exists=True, path_type=Path),
-    default=Path("/scratch-shared/fbaart/data/ais_data/20260430-2093161291.8-anonymous1-Noordzee_2025_01_TUD.parquet"),
+    required=True,
     help="Path to the AIS Parquet directory.",
 )
 @click.option(

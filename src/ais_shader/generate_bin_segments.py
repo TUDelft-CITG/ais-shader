@@ -4,8 +4,10 @@ from shapely.geometry import LineString
 from pathlib import Path
 
 def main():
-    input_path = Path("/scratch-shared/fbaart/data/PassageLine_NL_velocities.geojson")
-    output_path = Path("/scratch-shared/fbaart/data/PassageLine_NL_bin_segments.geojson")
+    import os
+    user = os.getenv("USER", "default")
+    input_path = Path(f"/scratch-shared/{user}/data/PassageLine_NL_velocities.geojson")
+    output_path = Path(f"/scratch-shared/{user}/data/PassageLine_NL_bin_segments.geojson")
     
     print(f"Loading velocities GeoJSON from {input_path}...")
     gdf = gpd.read_file(input_path)

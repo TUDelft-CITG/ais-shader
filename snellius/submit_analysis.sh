@@ -14,9 +14,9 @@ echo "Starting passage analysis job..."
 date
 
 uv run ais-shader analyze-passage \
-    --passage-file /scratch-shared/fbaart/data/euris-export/PassageLine_NL_20260224.geojson \
-    --ais-dir /scratch-shared/fbaart/data/ais_data/20260430-2093161291.8-anonymous1-Noordzee_2025_01_TUD.parquet \
-    --output-file /scratch-shared/fbaart/data/PassageLine_NL_velocities.geojson
+    --passage-file /scratch-shared/$USER/data/euris-export/PassageLine_NL_20260224.geojson \
+    --ais-dir /scratch-shared/$USER/data/ais_data/20260430-2093161291.8-anonymous1-Noordzee_2025_01_TUD.parquet \
+    --output-file /scratch-shared/$USER/data/PassageLine_NL_velocities.geojson
 
 echo "Passage analysis job finished."
 date
