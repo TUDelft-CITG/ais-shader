@@ -65,7 +65,7 @@ def run_strategy_1_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col):
     meta['turn_rate_from_cog'] = pd.Series(dtype='float64')
     meta['turn_rate_from_heading'] = pd.Series(dtype='float64')
 
-    from .moving_dask.trajectory import process_single_vessel_partition
+    from ais_shader.moving_dask.trajectory import process_single_vessel_partition
     # We apply directly on groupby
     # For Dask groupby apply, the applied function receives a pandas DataFrame for a single group (vessel)
     def process_group(df):
@@ -98,7 +98,7 @@ def run_strategy_3_set_index_map(ddf, vessel_id_col, time_col, x_col, y_col):
     meta['turn_rate_from_cog'] = pd.Series(dtype='float64')
     meta['turn_rate_from_heading'] = pd.Series(dtype='float64')
 
-    from .moving_dask.trajectory import process_single_vessel_partition
+    from ais_shader.moving_dask.trajectory import process_single_vessel_partition
     # We pass local operation that processes groups
     # Note that the index of df inside the partition mapper is vessel_id_col
     def local_op_indexed(df):

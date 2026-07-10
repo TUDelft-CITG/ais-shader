@@ -147,6 +147,7 @@ cgal = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "psutil" },
     { name = "pytest" },
 ]
 
@@ -177,7 +178,10 @@ requires-dist = [
 provides-extras = ["cgal"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.1.1" }]
+dev = [
+    { name = "psutil" },
+    { name = "pytest", specifier = ">=9.1.1" },
+]
 
 [[package]]
 name = "alembic"

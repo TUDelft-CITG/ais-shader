@@ -383,7 +383,16 @@ def benchmark(dataset_path, mlflow_tracking_uri, vessel_id_col, time_col, x_col,
     """
     Run Dask trajectorize benchmark sweeps logging to MLflow.
     """
-    from tests.benchmark import run_benchmark_suite
+    try:
+        from tests.benchmark import run_benchmark_suite
+    except ModuleNotFoundError:
+        import sys
+        click.secho(
+            "Error: The benchmark suite is only available when running from the source repository with tests installed (e.g. psutil and test files).",
+            fg="red",
+            err=True
+        )
+        sys.exit(1)
     run_benchmark_suite(
         dataset_path=str(dataset_path),
         mlflow_tracking_uri=mlflow_tracking_uri,

@@ -205,7 +205,7 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
         # Convert to GeoDataFrame
         logger.info("Converting DataFrame to GeoDataFrame with Point geometry...")
         def make_points(df):
-            df['base_date_time'] = pd.to_datetime(df['base_date_time'])
+            df['base_date_time'] = pd.to_datetime(df['base_date_time'], utc=True).dt.tz_localize(None)
             geometry = gpd.points_from_xy(df['longitude'], df['latitude'])
             return gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
             
