@@ -179,4 +179,4 @@ mlflow.db
 scripts/snellius/process_rws.sh
 
 # Generated visualization images
-docs/images/*.png
+docs/images/hilbert_spaces.png
