@@ -2,7 +2,8 @@ import pyarrow.parquet as pq
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Polygon
+from scipy.spatial import ConvexHull
 from pathlib import Path
 import sys
 
@@ -67,8 +68,7 @@ def main():
     fig.patch.set_facecolor('#0f172a')  # Slate-900 background
     ax.set_facecolor('#0f172a')
     
-    # Group partitions by their temporal centroids into 3 phases:
-    # Phase 1: Early Dec (Blue/Cyan), Phase 2: Mid Dec (Purple/Magenta), Phase 3: Late Dec (Yellow/Green)
+    # Group partitions by their temporal centroids into 3 phases
     part_times = []
     for part_id in range(n_partitions):
         part_df = df[df['partition'] == part_id]
@@ -110,14 +110,19 @@ def main():
                    label=group_label if f"printed_{group_label}" not in locals() else "")
         locals()[f"printed_{group_label}"] = True
         
-        # Compute spatial bounding box
-        px_min, px_max = part_df['longitude'].min(), part_df['longitude'].max()
-        py_min, py_max = part_df['latitude'].min(), part_df['latitude'].max()
-        
-        # Draw bounding box (overlapping translucent grids)
-        rect = Rectangle((px_min, py_min), px_max - px_min, py_max - py_min,
-                         linewidth=1.0, edgecolor=color, facecolor='none', alpha=0.4, linestyle='-')
-        ax.add_patch(rect)
+        # Compute spatial convex hull for partition
+        points = part_df[['longitude', 'latitude']].values
+        if len(points) >= 3:
+            try:
+                hull = ConvexHull(points)
+                hull_points = points[hull.vertices]
+                
+                # Draw convex hull polygon
+                poly = Polygon(hull_points, linewidth=1.2, edgecolor=color,
+                               facecolor=color, alpha=0.08, linestyle='-')
+                ax.add_patch(poly)
+            except Exception:
+                pass
         
         # Draw label at partition centroid
         cx = part_df['longitude'].mean()
@@ -126,7 +131,7 @@ def main():
                 bbox=dict(facecolor=color, edgecolor='none', boxstyle='round,pad=0.15', alpha=0.7))
                 
     # Labels & Title
-    ax.set_title('3D Spatio-Temporal Partitioning over US Coastline (32 Partitions, 3 Temporal Bands)', color='white', fontsize=14, weight='bold', pad=15)
+    ax.set_title('3D Spatio-Temporal Partitioning over US Coastline (32 Convex Hull Partitions, 3 Temporal Bands)', color='white', fontsize=14, weight='bold', pad=15)
     ax.set_xlabel('Longitude (Degrees)', color='#94a3b8')
     ax.set_ylabel('Latitude (Degrees)', color='#94a3b8')
     
@@ -138,7 +143,6 @@ def main():
     ax.tick_params(colors='#94a3b8', labelsize=9)
     
     # Legend
-    # Filter unique legend items
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     legend = ax.legend(by_label.values(), by_label.keys(), facecolor='#0f172a', edgecolor='#1e293b', labelcolor='white', loc='lower left', prop={'size': 9})
@@ -150,7 +154,7 @@ def main():
     out_path = out_dir / 'us_hilbert_spaces.png'
     plt.savefig(out_path, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
     plt.close()
-    print(f"Successfully generated 3D overlapping US partitioning visualization at: {out_path}")
+    print(f"Successfully generated US convex hull partitioning visualization at: {out_path}")
 
 if __name__ == '__main__':
     main()
