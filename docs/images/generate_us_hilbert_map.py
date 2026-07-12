@@ -17,9 +17,11 @@ def main():
     # 1. Read a subset of rows from multiple parquet files to cover a wider temporal range (e.g. 15 days)
     print("Reading sample coordinates across multiple US AIS dataset files...")
     files = sorted(list(Path(dataset_path).glob("*.parquet")))
+    # Stride across all files to get a representative temporal range from the entire month
+    stride = max(1, len(files) // 15)
+    selected_files = files[::stride][:15]
     dfs = []
-    # Read from the first 15 files to get a representative multi-day sample
-    for pfile in files[:15]:
+    for pfile in selected_files:
         try:
             tbl = pq.read_table(pfile, columns=['longitude', 'latitude', 'base_date_time'])
             df_part = tbl.to_pandas().dropna(subset=['longitude', 'latitude', 'base_date_time'])
