@@ -298,6 +298,7 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
     """
     Voyage segmentation and feature engineering on Dask.
     """
+    import dask_geopandas
     from dask.distributed import Client
     import dask.dataframe as dd
     from .moving_dask.trajectory import trajectorize_dataframe
@@ -309,13 +310,8 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
         
     try:
         logger.info(f"Reading input from {input_file}...")
-        try:
-            import dask_geopandas
-            ddf = dask_geopandas.read_parquet(input_file)
-        except Exception:
-            logger.info("Failed to read with dask_geopandas, falling back to standard dask dataframe...")
-            ddf = dd.read_parquet(input_file)
-        
+        ddf = dask_geopandas.read_parquet(input_file)
+
         # Run pipeline
         res_ddf = trajectorize_dataframe(
             ddf=ddf,
@@ -331,11 +327,11 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
             hilbert_p=hilbert_p,
             dataset_path=input_file
         )
-        
+
         logger.info(f"Saving trajectorized dataset to {output_file}...")
         res_ddf.to_parquet(output_file, overwrite=True)
         logger.info("Trajectorization complete!")
-     finally:
+    finally:
         client.close()
 
 

@@ -8,11 +8,11 @@ from pathlib import Path
 import sys
 
 # Import encode_3d_hilbert_numpy directly from the trajectory module
-sys.path.append('/home/fbaart/src/ais-shader/src')
+sys.path.append(str(Path(__file__).resolve().parents[2] / 'src'))
 from ais_shader.moving_dask.trajectory import encode_3d_hilbert_numpy
 
 def main():
-    dataset_path = '/projects/prjs2131/data/marine-cadastre/ais_2025_12'
+    dataset_path = '/projects/prjs2131/data/marine-cadastre/ais_2025_12_trajectories.parquet'
     
     # 1. Read a subset of rows from multiple parquet files to cover a wider temporal range (e.g. 15 days)
     print("Reading sample coordinates across multiple US AIS dataset files...")
@@ -23,7 +23,6 @@ def main():
         try:
             tbl = pq.read_table(pfile, columns=['longitude', 'latitude', 'base_date_time'])
             df_part = tbl.to_pandas().dropna(subset=['longitude', 'latitude', 'base_date_time'])
-            # Filter to main US continental area to make the map look nice
             df_part = df_part[(df_part['longitude'] >= -125) & (df_part['longitude'] <= -70) & (df_part['latitude'] >= 24) & (df_part['latitude'] <= 48)]
             if not df_part.empty:
                 df_part = df_part.sample(n=min(1500, len(df_part)), random_state=42)
@@ -98,6 +97,7 @@ def main():
     band_size = n_valid // 3
     
     # Plot partitions
+    printed_labels = set()
     for rank, part_id in enumerate(sorted_parts):
         part_df = df[df['partition'] == part_id]
         if part_df.empty:
@@ -117,24 +117,28 @@ def main():
         # Plot points of this partition (small dots)
         ax.scatter(part_df['longitude'], part_df['latitude'], 
                    color=color, s=1.5, alpha=0.3, 
-                   label=group_label if f"printed_{group_label}" not in locals() else "")
-        locals()[f"printed_{group_label}"] = True
+                   label=group_label if group_label not in printed_labels else "")
+        printed_labels.add(group_label)
         
         # Compute spatial convex hull for partition
         points = part_df[['longitude', 'latitude']].values
         if len(points) >= 3:
-            try:
-                hull = ConvexHull(points)
-                hull_points = points[hull.vertices]
-                poly = Polygon(hull_points, linewidth=1.2, edgecolor=color,
-                               facecolor=color, alpha=0.08, linestyle='-')
-                ax.add_patch(poly)
-            except Exception:
-                pass
+            hull = ConvexHull(points)
+            hull_points = points[hull.vertices]
+            poly = Polygon(hull_points, linewidth=1.2, edgecolor=color,
+                           facecolor=color, alpha=0.08, linestyle='-')
+            ax.add_patch(poly)
         
-        # Determine temporal scale (day start - day stop, rounded to integers)
-        start_day = int(part_df['base_date_time'].min().day)
-        end_day = int(part_df['base_date_time'].max().day)
+        # Determine temporal scale (use 10th to 90th percentile to show the core temporal range of the partition)
+        days = part_df['base_date_time'].dt.day.values
+        start_day = int(np.percentile(days, 10))
+        end_day = int(np.percentile(days, 90))
+        
+        # Fallback if percentile calculation yields identical bounds for very narrow ranges
+        if start_day == end_day:
+            start_day = int(part_df['base_date_time'].min().day)
+            end_day = int(part_df['base_date_time'].max().day)
+            
         label_text = f"P{part_id}\n{start_day}d-{end_day}d"
         
         # Draw label at partition centroid
@@ -163,7 +167,7 @@ def main():
         legend.get_frame().set_alpha(0.8)
         
     # Save the output image
-    out_dir = Path('/home/fbaart/src/ais-shader/docs/images')
+    out_dir = Path(__file__).resolve().parent
     out_path = out_dir / 'us_hilbert_spaces.png'
     plt.savefig(out_path, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
     plt.close()

@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+import geopandas as gpd
+import dask_geopandas
 import dask.dataframe as dd
 from dask.distributed import Client
 import pytest
@@ -112,7 +114,8 @@ def test_trajectorize_dataframe():
         }
         
         df = pd.DataFrame(data)
-        ddf = dd.from_pandas(df, npartitions=2)
+        gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['longitude'], df['latitude']), crs="EPSG:4326")
+        ddf = dask_geopandas.from_geopandas(gdf, npartitions=2)
         
         # Run Dask trajectorize
         res_ddf = trajectorize_dataframe(
@@ -178,15 +181,16 @@ def test_trajectorize_spatiotemporal():
         }
         
         df = pd.DataFrame(data)
-        ddf = dd.from_pandas(df, npartitions=2)
+        gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['longitude'], df['latitude']), crs="EPSG:4326")
+        ddf = dask_geopandas.from_geopandas(gdf, npartitions=2)
         
         global_bounds = {
             "x_min": 0.0,
             "x_max": 2.5,
             "y_min": 0.0,
             "y_max": 4.5,
-            "t_min": pd.to_datetime('2026-01-01 00:00:00'),
-            "t_max": pd.to_datetime('2026-01-01 00:35:00')
+            "t_min": pd.to_datetime('2025-12-01 00:00:00'),
+            "t_max": pd.to_datetime('2025-12-01 00:45:00')
         }
 
         # Run Dask trajectorize with spatiotemporal partitioning

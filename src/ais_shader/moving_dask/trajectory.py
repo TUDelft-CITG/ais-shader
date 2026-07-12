@@ -1,31 +1,46 @@
 import logging
+from pathlib import Path
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
+from pyproj import CRS, Transformer
+import geopandas as gpd
+import dask
 import dask.dataframe as dd
+
+from .features import calculate_kinematic_features_pandas
 
 try:
     from .. import _cgal_hull
 except ImportError:
-    import _cgal_hull
-
-from .features import calculate_kinematic_features_pandas
+    try:
+        import _cgal_hull
+    except ImportError:
+        _cgal_hull = None
 
 logger = logging.getLogger(__name__)
 
 def get_parquet_bounds(dataset_path: str, x_col: str, y_col: str, time_col: str):
-    from pathlib import Path
-    import pyarrow.parquet as pq
+    """
+    Retrieve coordinate and temporal bounds from a single Parquet/GeoParquet file or a directory of them.
     
+    Parameters
+    ----------
+    dataset_path : str
+        Path to a single file (with .parquet or .geoparquet extension) or a directory containing them.
+    x_col, y_col, time_col : str
+        Target column names.
+    """
     path = Path(dataset_path)
     if path.is_dir():
-        files = list(path.glob("**/*.parquet"))
+        files = list(path.glob("**/*.parquet")) + list(path.glob("**/*.geoparquet"))
         if not files:
-            files = list(path.glob("*.parquet"))
+            files = list(path.glob("*.parquet")) + list(path.glob("*.geoparquet"))
     else:
         files = [path]
         
     if not files:
-        raise ValueError(f"No parquet files found at path: {dataset_path}")
+        raise ValueError(f"No Parquet or GeoParquet files found at path: {dataset_path}")
         
     x_mins, x_maxs = [], []
     y_mins, y_maxs = [], []
@@ -62,6 +77,8 @@ def _calculate_rolling_hull_area(points_array):
     """Calculates the area of the convex hull for a set of planar points (in meters) using CGAL."""
     if len(points_array) < 3:
         return 0.0
+    if _cgal_hull is None:
+        raise ImportError("The compiled C++ extension '_cgal_hull' is not available. Please compile the extensions first.")
     return _cgal_hull.convex_hull_area_2(points_array)
 
 def encode_3d_hilbert_numpy(coords: np.ndarray, p: int) -> np.ndarray:
@@ -154,8 +171,38 @@ def apply_halo(
     time_col: str,
     vessel_id_col: str,
     spatial_halo_coord: float,
-    stop_duration_min: float
+    stop_duration_min: float,
+    gap_threshold_hours: float = 1.0
 ) -> pd.DataFrame:
+    """
+    Construct delayed boundary halos (Overlap/Lookback) for a partition.
+    
+    Copies and appends matching points from adjacent partitions (prev_df/next_df)
+    to ensure stop detection and trip segmentation math are correct at partition boundaries.
+    
+    Parameters
+    ----------
+    curr_df : pd.DataFrame or gpd.GeoDataFrame
+        The current partition being processed.
+    prev_df : pd.DataFrame or gpd.GeoDataFrame, optional
+        The preceding partition along the sorted index (contains prior space-time points).
+    next_df : pd.DataFrame or gpd.GeoDataFrame, optional
+        The succeeding partition along the sorted index (contains future space-time points).
+    x_col, y_col, time_col, vessel_id_col : str
+        Target column names.
+    spatial_halo_coord : float
+        Spatial buffer distance in coordinate units (degrees or meters) to look for adjacent points.
+    stop_duration_min : float
+        Stop duration threshold in minutes used to determine temporal search window.
+    gap_threshold_hours : float
+        Trip segmentation gap threshold in hours used to determine temporal search window.
+    
+    Returns
+    -------
+    pd.DataFrame or gpd.GeoDataFrame
+        The current partition appended with matching halo boundary points from adjacent partitions,
+        marked with a '_is_halo' column.
+    """
     if curr_df is None or curr_df.empty:
         if curr_df is not None and '_is_halo' not in curr_df.columns:
             curr_df = curr_df.copy()
@@ -169,9 +216,13 @@ def apply_halo(
     y_min, y_max = curr_df[y_col].min(), curr_df[y_col].max()
     t_min, t_max = curr_df[time_col].min(), curr_df[time_col].max()
     
-    dt = pd.Timedelta(minutes=stop_duration_min)
+    lookback_minutes = max(stop_duration_min, gap_threshold_hours * 60.0)
+    dt = pd.Timedelta(minutes=lookback_minutes)
     
     extra_dfs = []
+    # Filter the preceding partition (prev_df) to get points (prev_filtered) that are:
+    # 1. Temporally within the lookback window (t_min - dt to t_min)
+    # 2. Spatially adjacent to the current partition's bounding box coordinates (plus/minus spatial_halo_coord)
     if prev_df is not None and not prev_df.empty:
         prev_filtered = prev_df[
             (prev_df[time_col] >= t_min - dt) &
@@ -185,6 +236,9 @@ def apply_halo(
             prev_filtered['_is_halo'] = True
             extra_dfs.append(prev_filtered)
             
+    # Filter the succeeding partition (next_df) to get points (next_filtered) that are:
+    # 1. Temporally within the look-forward window (t_max to t_max + dt)
+    # 2. Spatially adjacent to the current partition's bounding box coordinates (plus/minus spatial_halo_coord)
     if next_df is not None and not next_df.empty:
         next_filtered = next_df[
             (next_df[time_col] >= t_max) &
@@ -240,7 +294,6 @@ def process_single_vessel_partition(
         df['_is_halo'] = False
 
     # Pre-project coordinates once for the entire partition if CRS is geographic
-    from pyproj import CRS, Transformer
     crs_obj = CRS(input_crs)
     if crs_obj.is_geographic:
         # Center the projection on the mean of the partition coordinates
@@ -280,6 +333,8 @@ def process_single_vessel_partition(
         starts = np.searchsorted(times, times - window_ns, side='left')
         
         # Compute rolling areas entirely in C++ using CGAL
+        if _cgal_hull is None:
+            raise ImportError("The compiled C++ extension '_cgal_hull' is not available. Please compile the extensions first.")
         rolling_areas = _cgal_hull.rolling_convex_hull_area_2(planar_coords, starts.astype(np.intp))
         v_df['rolling_area_m2'] = rolling_areas
         
@@ -323,21 +378,19 @@ def process_single_vessel_partition(
         
     if processed_vessels:
         result = pd.concat(processed_vessels)
-        if '_x_proj' in result.columns:
-            result = result.drop(columns=['_x_proj', '_y_proj'])
-        if not has_halo_col and '_is_halo' in result.columns:
+        result = result.drop(columns=['_x_proj', '_y_proj'])
+        if not has_halo_col:
             result = result.drop(columns=['_is_halo'])
-        elif has_halo_col and '_is_halo' in result.columns:
+        else:
             cols = [c for c in result.columns if c != '_is_halo'] + ['_is_halo']
             result = result[cols]
         return result
         
     empty_df = pd.DataFrame(columns=df.columns)
-    if '_x_proj' in empty_df.columns:
-        empty_df = empty_df.drop(columns=['_x_proj', '_y_proj'])
-    if not has_halo_col and '_is_halo' in empty_df.columns:
+    empty_df = empty_df.drop(columns=['_x_proj', '_y_proj'])
+    if not has_halo_col:
         empty_df = empty_df.drop(columns=['_is_halo'])
-    elif has_halo_col and '_is_halo' in empty_df.columns:
+    else:
         cols = [c for c in empty_df.columns if c != '_is_halo'] + ['_is_halo']
         empty_df = empty_df[cols]
     return empty_df
@@ -365,8 +418,6 @@ def trajectorize_dataframe(
     """
     Dask-compatible entrypoint to perform voyage segmentation and feature engineering.
     """
-    import dask
-    
     meta = ddf._meta.copy()
     meta[time_col] = pd.to_datetime(meta[time_col])
     meta['time_diff_s'] = pd.Series(dtype='float64')
@@ -377,184 +428,280 @@ def trajectorize_dataframe(
     meta['turn_rate_from_cog'] = pd.Series(dtype='float64')
     meta['turn_rate_from_heading'] = pd.Series(dtype='float64')
 
-    if 'geometry' in meta.columns:
-        import geopandas as gpd
-        crs = getattr(ddf, 'crs', None)
-        meta = gpd.GeoDataFrame(meta, geometry='geometry', crs=crs)
+    if 'geometry' not in meta.columns:
+        raise ValueError("The input Dask DataFrame must contain a 'geometry' column.")
+    crs = getattr(ddf, 'crs', None)
+    meta = gpd.GeoDataFrame(meta, geometry='geometry', crs=crs)
 
     gap_threshold_seconds = gap_threshold_hours * 3600.0
 
     if partition_method == "spatiotemporal":
-        if global_bounds is not None:
-            logger.info("Using explicit global_bounds for spatio-temporal partitioning...")
-            x_min = global_bounds["x_min"]
-            x_max = global_bounds["x_max"]
-            y_min = global_bounds["y_min"]
-            y_max = global_bounds["y_max"]
-            t_min = global_bounds["t_min"]
-            t_max = global_bounds["t_max"]
-        else:
-            if not dataset_path:
-                raise ValueError("dataset_path must be provided for spatio-temporal partitioning to retrieve metadata statistics")
-
-            logger.info(f"Retrieving global bounds from Parquet metadata at {dataset_path}...")
-            x_min, x_max, y_min, y_max, t_min, t_max = get_parquet_bounds(dataset_path, x_col, y_col, time_col)
-        
-        # Enforce correct datetime type only if not already datetime
-        if not pd.api.types.is_datetime64_any_dtype(ddf[time_col]):
-            ddf = ddf.copy()
-            ddf[time_col] = dd.to_datetime(ddf[time_col])
-            
-        t_min_epoch = pd.to_datetime(t_min).timestamp()
-        t_max_epoch = pd.to_datetime(t_max).timestamp()
-        
-        logger.info(f"Global bounds: X=[{x_min}, {x_max}], Y=[{y_min}, {y_max}], Time=[{t_min}, {t_max}]")
-        
-        # 2. Compute 3D Hilbert Coordinates & Index
-        meta_hilbert = ddf._meta.copy()
-        meta_hilbert['hilbert_index'] = pd.Series(dtype='int64')
-        if 'geometry' in meta_hilbert.columns:
-            import geopandas as gpd
-            crs = getattr(ddf, 'crs', None)
-            meta_hilbert = gpd.GeoDataFrame(meta_hilbert, geometry='geometry', crs=crs)
-            
-        ddf_hilbert = ddf.map_partitions(
-            add_hilbert_index,
-            x_col=x_col,
-            y_col=y_col,
-            time_col=time_col,
-            x_min=x_min,
-            x_max=x_max,
-            y_min=y_min,
-            y_max=y_max,
-            t_min_epoch=t_min_epoch,
-            t_max_epoch=t_max_epoch,
-            p=hilbert_p,
-            meta=meta_hilbert
-        )
-        
-        # 3. Sort/partition by hilbert_index
-        logger.info(f"Estimating partitions divisions on a 1% sample of hilbert_index...")
-        sample_indices = ddf_hilbert['hilbert_index'].sample(frac=0.01).compute()
-        import numpy as np
-        quantiles = np.linspace(0, 1, n_partitions + 1)
-        divisions = list(sample_indices.quantile(quantiles))
-        
-        # Ensure divisions are unique and monotonic
-        divisions = sorted(list(set(divisions)))
-        # Dask set_index requires at least 2 unique divisions
-        if len(divisions) < 2:
-            h_min = ddf_hilbert['hilbert_index'].min().compute()
-            h_max = ddf_hilbert['hilbert_index'].max().compute()
-            if h_min == h_max:
-                divisions = [h_min, h_min + 1]
-            else:
-                divisions = [h_min, h_max]
-                
-        logger.info(f"Setting index to 'hilbert_index' using estimated divisions...")
-        ddf_sorted = ddf_hilbert.set_index('hilbert_index', divisions=divisions, shuffle=shuffle_backend)
-        
-        # 4. Construct delayed boundary halos (Overlap/Lookback)
-        logger.info("Constructing overlapping boundaries/halos...")
-        parts = ddf_sorted.to_delayed()
-        new_parts = []
-        n_delayed = len(parts)
-        
-        # Determine spatial halo unit
-        from pyproj import CRS
-        crs_obj = CRS(input_crs)
-        if crs_obj.is_geographic:
-            spatial_halo_coord = stop_radius_m / 111320.0
-        else:
-            spatial_halo_coord = stop_radius_m
-            
-        for i in range(n_delayed):
-            prev_part = parts[i - 1] if i > 0 else None
-            curr_part = parts[i]
-            next_part = parts[i + 1] if i < n_delayed - 1 else None
-            
-            new_part = dask.delayed(apply_halo)(
-                curr_part, prev_part, next_part,
-                x_col=x_col, y_col=y_col, time_col=time_col,
-                vessel_id_col=vessel_id_col,
-                spatial_halo_coord=spatial_halo_coord,
-                stop_duration_min=stop_duration_min
-            )
-            new_parts.append(new_part)
-            
-        meta_halo = ddf_sorted._meta.copy()
-        meta_halo['_is_halo'] = pd.Series(dtype='bool')
-        ddf_halo = dd.from_delayed(new_parts, meta=meta_halo)
-        
-        # 5. Process local partitions (stop detection, feature engineering)
-        logger.info("Processing spatio-temporal partitions (stops, features)...")
-        meta_halo_out = ddf._meta.copy()
-        meta_halo_out[time_col] = pd.to_datetime(meta_halo_out[time_col])
-        meta_halo_out['time_diff_s'] = pd.Series(dtype='float64')
-        meta_halo_out['rolling_area_m2'] = pd.Series(dtype='float64')
-        meta_halo_out['trip_id'] = pd.Series(dtype='str')
-        meta_halo_out['speed_mps'] = pd.Series(dtype='float64')
-        meta_halo_out['acceleration_mps2'] = pd.Series(dtype='float64')
-        meta_halo_out['turn_rate_from_cog'] = pd.Series(dtype='float64')
-        meta_halo_out['turn_rate_from_heading'] = pd.Series(dtype='float64')
-        meta_halo_out['_is_halo'] = pd.Series(dtype='bool')
-
-        if 'geometry' in meta_halo_out.columns:
-            import geopandas as gpd
-            crs = getattr(ddf, 'crs', None)
-            meta_halo_out = gpd.GeoDataFrame(meta_halo_out, geometry='geometry', crs=crs)
-
-        result = ddf_halo.map_partitions(
-            process_single_vessel_partition,
+        return _trajectorize_spatiotemporal(
+            ddf=ddf,
             vessel_id_col=vessel_id_col,
             time_col=time_col,
             x_col=x_col,
             y_col=y_col,
-            gap_threshold_seconds=gap_threshold_seconds,
-            stop_duration_min=stop_duration_min,
-            stop_radius_m=stop_radius_m,
             cog_col=cog_col,
             heading_col=heading_col,
             sog_col=sog_col,
+            gap_threshold_seconds=gap_threshold_seconds,
+            gap_threshold_hours=gap_threshold_hours,
+            stop_duration_min=stop_duration_min,
+            stop_radius_m=stop_radius_m,
+            shuffle_backend=shuffle_backend,
+            n_partitions=n_partitions,
             input_crs=input_crs,
-            meta=meta_halo_out
+            hilbert_p=hilbert_p,
+            dataset_path=dataset_path,
+            global_bounds=global_bounds
         )
-        
-        # 6. Crop and save: discard halo points and clean up
-        logger.info("Cropping boundary halos from result...")
-        result = result[~result['_is_halo']]
-        result = result.drop(columns=['_is_halo'])
-        
-        return result
-
-    else:
-        # Repartition if the number of partitions is too small to prevent worker OOM during shuffle
-        if ddf.npartitions < n_partitions:
-            logger.info(f"DataFrame has only {ddf.npartitions} partitions. Repartitioning to {n_partitions} partitions for load balancing...")
-            ddf = ddf.repartition(npartitions=n_partitions)
-
-        # Shuffle so same vessel IDs are guaranteed to be in the same partition
-        ddf_shuffled = ddf.shuffle(on=vessel_id_col, shuffle=shuffle_backend)
-        
-        logger.info("Applying partition-wise stop detection, segmentation, and feature engineering...")
-        result = ddf_shuffled.map_partitions(
-            process_single_vessel_partition,
+    elif partition_method == "vessel":
+        return _trajectorize_vessel_shuffle(
+            ddf=ddf,
             vessel_id_col=vessel_id_col,
             time_col=time_col,
             x_col=x_col,
             y_col=y_col,
-            gap_threshold_seconds=gap_threshold_seconds,
-            stop_duration_min=stop_duration_min,
-            stop_radius_m=stop_radius_m,
             cog_col=cog_col,
             heading_col=heading_col,
             sog_col=sog_col,
+            gap_threshold_seconds=gap_threshold_seconds,
+            stop_duration_min=stop_duration_min,
+            stop_radius_m=stop_radius_m,
+            shuffle_backend=shuffle_backend,
+            n_partitions=n_partitions,
             input_crs=input_crs,
             meta=meta
         )
+    else:
+        raise ValueError(f"Unknown partition_method: {partition_method}")
+
+def _trajectorize_spatiotemporal(
+    ddf: dd.DataFrame,
+    vessel_id_col: str,
+    time_col: str,
+    x_col: str,
+    y_col: str,
+    cog_col: str,
+    heading_col: str,
+    sog_col: str,
+    gap_threshold_seconds: float,
+    gap_threshold_hours: float,
+    stop_duration_min: float,
+    stop_radius_m: float,
+    shuffle_backend: str,
+    n_partitions: int,
+    input_crs: str,
+    hilbert_p: int,
+    dataset_path: str,
+    global_bounds: dict
+) -> dd.DataFrame:
+    """Helper strategy for spatio-temporal partitioning using 3D Hilbert Curve."""
+    if global_bounds is not None:
+        logger.info("Using explicit global_bounds for spatio-temporal partitioning...")
+        x_min = global_bounds["x_min"]
+        x_max = global_bounds["x_max"]
+        y_min = global_bounds["y_min"]
+        y_max = global_bounds["y_max"]
+        t_min = global_bounds["t_min"]
+        t_max = global_bounds["t_max"]
+    else:
+        if not dataset_path:
+            raise ValueError("dataset_path must be provided for spatio-temporal partitioning to retrieve metadata statistics")
+
+        logger.info(f"Retrieving global bounds from Parquet metadata at {dataset_path}...")
+        x_min, x_max, y_min, y_max, t_min, t_max = get_parquet_bounds(dataset_path, x_col, y_col, time_col)
+    
+    # Enforce correct datetime type only if not already datetime
+    if not pd.api.types.is_datetime64_any_dtype(ddf[time_col]):
+        ddf = ddf.copy()
+        ddf[time_col] = dd.to_datetime(ddf[time_col])
         
-        # Drop _is_halo if it was added
-        if '_is_halo' in result.columns:
-            result = result.drop(columns=['_is_halo'])
+    t_min_epoch = pd.to_datetime(t_min).timestamp()
+    t_max_epoch = pd.to_datetime(t_max).timestamp()
+    
+    logger.info(f"Global bounds: X=[{x_min}, {x_max}], Y=[{y_min}, {y_max}], Time=[{t_min}, {t_max}]")
+    
+    # 2. Compute 3D Hilbert Coordinates & Index
+    meta_hilbert = ddf._meta.copy()
+    meta_hilbert['hilbert_index'] = pd.Series(dtype='int64')
+    if 'geometry' not in meta_hilbert.columns:
+        raise ValueError("The input Dask DataFrame must contain a 'geometry' column.")
+    crs = getattr(ddf, 'crs', None)
+    meta_hilbert = gpd.GeoDataFrame(meta_hilbert, geometry='geometry', crs=crs)
+        
+    ddf_hilbert = ddf.map_partitions(
+        add_hilbert_index,
+        x_col=x_col,
+        y_col=y_col,
+        time_col=time_col,
+        x_min=x_min,
+        x_max=x_max,
+        y_min=y_min,
+        y_max=y_max,
+        t_min_epoch=t_min_epoch,
+        t_max_epoch=t_max_epoch,
+        p=hilbert_p,
+        meta=meta_hilbert
+    )
+    
+    # 3. Sort/partition by hilbert_index
+    logger.info(f"Estimating partitions divisions on a sample of hilbert_index...")
+    
+    h_min = ddf_hilbert['hilbert_index'].min().compute()
+    h_max = ddf_hilbert['hilbert_index'].max().compute()
+    
+    if pd.isna(h_min) or h_min is None:
+        h_min = 0
+    if pd.isna(h_max) or h_max is None:
+        h_max = 1
+    if h_min == h_max:
+        h_max = h_min + n_partitions
+        
+    sample_indices = ddf_hilbert['hilbert_index'].sample(frac=0.01).compute()
+    if sample_indices is not None:
+        sample_indices = sample_indices.dropna()
+        
+    quantiles = np.linspace(0, 1, n_partitions + 1)
+    if sample_indices is None or len(sample_indices) < n_partitions * 2:
+        divisions = list(np.linspace(h_min, h_max, n_partitions + 1))
+    else:
+        divisions = list(sample_indices.quantile(quantiles))
+        # Clean up and ensure min/max bounds are respected
+        divisions[0] = min(divisions[0], h_min)
+        divisions[-1] = max(divisions[-1], h_max)
+        
+        # Ensure strictly increasing by adding a small epsilon
+        for i in range(1, len(divisions)):
+            if divisions[i] <= divisions[i-1]:
+                divisions[i] = divisions[i-1] + 1
+                
+        if divisions[-1] <= divisions[-2]:
+            divisions = list(np.linspace(h_min, h_max, n_partitions + 1))
             
-        return result
+    logger.info(f"Setting index to 'hilbert_index' using estimated divisions...")
+    ddf_sorted = ddf_hilbert.set_index('hilbert_index', divisions=divisions, shuffle=shuffle_backend)
+    
+    # 4. Construct delayed boundary halos (Overlap/Lookback)
+    logger.info("Constructing overlapping boundaries/halos...")
+    parts = ddf_sorted.to_delayed()
+    new_parts = []
+    n_delayed = len(parts)
+    
+    # Determine spatial halo unit
+    from pyproj import CRS
+    crs_obj = CRS(input_crs)
+    if crs_obj.is_geographic:
+        spatial_halo_coord = stop_radius_m / 111320.0
+    else:
+        spatial_halo_coord = stop_radius_m
+        
+    for i in range(n_delayed):
+        prev_part = parts[i - 1] if i > 0 else None
+        curr_part = parts[i]
+        next_part = parts[i + 1] if i < n_delayed - 1 else None
+        
+        new_part = dask.delayed(apply_halo)(
+            curr_part, prev_part, next_part,
+            x_col=x_col, y_col=y_col, time_col=time_col,
+            vessel_id_col=vessel_id_col,
+            spatial_halo_coord=spatial_halo_coord,
+            stop_duration_min=stop_duration_min,
+            gap_threshold_hours=gap_threshold_hours
+        )
+        new_parts.append(new_part)
+        
+    meta_halo = ddf_sorted._meta.copy()
+    meta_halo['_is_halo'] = pd.Series(dtype='bool')
+    ddf_halo = dd.from_delayed(new_parts, meta=meta_halo)
+    
+    # 5. Process local partitions (stop detection, feature engineering)
+    logger.info("Processing spatio-temporal partitions (stops, features)...")
+    meta_halo_out = ddf._meta.copy()
+    meta_halo_out[time_col] = pd.to_datetime(meta_halo_out[time_col])
+    meta_halo_out['time_diff_s'] = pd.Series(dtype='float64')
+    meta_halo_out['rolling_area_m2'] = pd.Series(dtype='float64')
+    meta_halo_out['trip_id'] = pd.Series(dtype='str')
+    meta_halo_out['speed_mps'] = pd.Series(dtype='float64')
+    meta_halo_out['acceleration_mps2'] = pd.Series(dtype='float64')
+    meta_halo_out['turn_rate_from_cog'] = pd.Series(dtype='float64')
+    meta_halo_out['turn_rate_from_heading'] = pd.Series(dtype='float64')
+    meta_halo_out['_is_halo'] = pd.Series(dtype='bool')
+
+    if 'geometry' not in meta_halo_out.columns:
+        raise ValueError("The input Dask DataFrame must contain a 'geometry' column.")
+    crs = getattr(ddf, 'crs', None)
+    meta_halo_out = gpd.GeoDataFrame(meta_halo_out, geometry='geometry', crs=crs)
+
+    result = ddf_halo.map_partitions(
+        process_single_vessel_partition,
+        vessel_id_col=vessel_id_col,
+        time_col=time_col,
+        x_col=x_col,
+        y_col=y_col,
+        gap_threshold_seconds=gap_threshold_seconds,
+        stop_duration_min=stop_duration_min,
+        stop_radius_m=stop_radius_m,
+        cog_col=cog_col,
+        heading_col=heading_col,
+        sog_col=sog_col,
+        input_crs=input_crs,
+        meta=meta_halo_out
+    )
+    
+    # 6. Crop and save: discard halo points and clean up
+    logger.info("Cropping boundary halos from result...")
+    result = result[~result['_is_halo']]
+    result = result.drop(columns=['_is_halo'])
+    
+    return result
+
+def _trajectorize_vessel_shuffle(
+    ddf: dd.DataFrame,
+    vessel_id_col: str,
+    time_col: str,
+    x_col: str,
+    y_col: str,
+    cog_col: str,
+    heading_col: str,
+    sog_col: str,
+    gap_threshold_seconds: float,
+    stop_duration_min: float,
+    stop_radius_m: float,
+    shuffle_backend: str,
+    n_partitions: int,
+    input_crs: str,
+    meta: gpd.GeoDataFrame
+) -> dd.DataFrame:
+    """Helper strategy for standard vessel grouping and Dask shuffling."""
+    # Repartition if the number of partitions is too small to prevent worker OOM during shuffle
+    if ddf.npartitions < n_partitions:
+        logger.info(f"DataFrame has only {ddf.npartitions} partitions. Repartitioning to {n_partitions} partitions for load balancing...")
+        ddf = ddf.repartition(npartitions=n_partitions)
+
+    # Shuffle so same vessel IDs are guaranteed to be in the same partition
+    ddf_shuffled = ddf.shuffle(on=vessel_id_col, shuffle=shuffle_backend)
+    
+    logger.info("Applying partition-wise stop detection, segmentation, and feature engineering...")
+    result = ddf_shuffled.map_partitions(
+        process_single_vessel_partition,
+        vessel_id_col=vessel_id_col,
+        time_col=time_col,
+        x_col=x_col,
+        y_col=y_col,
+        gap_threshold_seconds=gap_threshold_seconds,
+        stop_duration_min=stop_duration_min,
+        stop_radius_m=stop_radius_m,
+        cog_col=cog_col,
+        heading_col=heading_col,
+        sog_col=sog_col,
+        input_crs=input_crs,
+        meta=meta
+    )
+    
+    # Drop _is_halo if it was added
+    if '_is_halo' in result.columns:
+        result = result.drop(columns=['_is_halo'])
+        
+    return result

@@ -104,6 +104,26 @@ ogr2ogr -f Parquet -t_srs EPSG:3857 raw.parquet input.gpkg
 uv run preprocess.py --input-file raw.parquet --output-file processed.parquet
 ```
 
+### 1.5. Trajectorize (Voyage Segmentation & Feature Engineering)
+
+Segment raw AIS points into trips, detect vessel stops, and compute kinematic features (speed, acceleration, turn rate) on a Dask cluster using spatial or spatiotemporal partitioning:
+
+```bash
+uv run ais-shader trajectorize \
+    --input-file /path/to/processed.parquet \
+    --output-file /path/to/trajectorized.parquet \
+    --partition-method spatiotemporal \
+    --hilbert-p 16 \
+    --n-partitions 128
+```
+
+Key Options:
+- `--partition-method`: Partitioning strategy, either `vessel` (MMSI group) or `spatiotemporal` (3D space-time Hilbert curve partitioning + halo lookback, default).
+- `--hilbert-p`: Order of the 3D Hilbert Curve (default: `16`).
+- `--n-partitions`: Number of target partitions (default: `128`).
+- `--gap-threshold-hours`: Trip segmentation threshold in hours (default: `1.0`).
+- `--input-crs`: Coordinate reference system of coordinates (default: `EPSG:4326`).
+
 ### 2. Configuration
 
 Edit `config.toml` to customize the visualization:

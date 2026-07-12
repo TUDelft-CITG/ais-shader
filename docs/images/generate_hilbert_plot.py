@@ -1,86 +1,106 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Rectangle
 from pathlib import Path
+import sys
+from mpl_toolkits.mplot3d import Axes3D
 
-def hilbert_2d(x, y, xi, xj, yi, yj, n):
-    if n <= 0:
-        return [(x + (xi + yi)/2, y + (xj + yj)/2)]
-    
-    pts = []
-    # Four quadrants
-    pts.extend(hilbert_2d(x, y, yi/2, yj/2, xi/2, xj/2, n-1))
-    pts.extend(hilbert_2d(x + xi/2, y + xj/2, xi/2, xj/2, yi/2, yj/2, n-1))
-    pts.extend(hilbert_2d(x + xi/2 + yi/2, y + xj/2 + yj/2, xi/2, xj/2, yi/2, yj/2, n-1))
-    pts.extend(hilbert_2d(x + xi/2 + yi, y + xj/2 + yj, -yi/2, -yj/2, -xi/2, -xj/2, n-1))
-    return pts
+sys.path.append(str(Path(__file__).resolve().parents[2] / 'src'))
+from ais_shader.moving_dask.trajectory import encode_3d_hilbert_numpy
 
 def main():
-    p = 3  # Order 3 gives 8x8 = 64 cells
+    p = 3  # Order 3 gives 8x8x8 = 512 cells
     grid_size = 2**p
-    pts = hilbert_2d(0, 0, 1, 0, 0, 1, p)
     
-    # Scale points to fit a grid of size 8x8
-    pts = np.array(pts) * grid_size
+    # Generate all coordinates in an 8x8x8 grid
+    x, y, z = np.meshgrid(np.arange(grid_size), np.arange(grid_size), np.arange(grid_size), indexing='ij')
+    coords = np.column_stack((x.ravel(), y.ravel(), z.ravel()))
     
-    # Create the figure
-    fig, ax = plt.subplots(figsize=(8, 8), dpi=150)
+    # Encode with our 3D Hilbert implementation
+    indices = encode_3d_hilbert_numpy(coords, p)
+    
+    # Sort coordinates by their Hilbert index to trace the curve path
+    sorted_idx = np.argsort(indices)
+    pts = coords[sorted_idx]
+    
+    # Create 3D figure
+    fig = plt.figure(figsize=(10, 8), dpi=150)
+    ax = fig.add_subplot(111, projection='3d')
     
     # Set background style
     fig.patch.set_facecolor('#0f172a')  # Slate-900 background
     ax.set_facecolor('#0f172a')
     
-    # Plot the grid cells
-    cmap = plt.get_cmap('plasma')  # Use plasma colormap for vibrant look
-    for idx, (x, y) in enumerate(pts):
-        # Determine the lower-left corner of the grid cell
-        cx = int(x - 0.5)
-        cy = int(y - 0.5)
+    # Style the axes
+    ax.xaxis.set_pane_color((0.09, 0.13, 0.22, 1.0)) # Slate-800-like
+    ax.yaxis.set_pane_color((0.09, 0.13, 0.22, 1.0))
+    ax.zaxis.set_pane_color((0.09, 0.13, 0.22, 1.0))
+    ax.grid(True, color='#1e293b', linestyle='--', linewidth=0.5)
+    
+    # Change tick and label colors
+    ax.tick_params(colors='#94a3b8', labelsize=8)
+    ax.set_xlabel('X (Space)', color='#94a3b8', fontsize=10, labelpad=5)
+    ax.set_ylabel('Y (Space)', color='#94a3b8', fontsize=10, labelpad=5)
+    ax.set_zlabel('T (Time)', color='#94a3b8', fontsize=10, labelpad=5)
+    
+    # Draw the 3D Hilbert Curve colored by its index (spatiotemporal partitions)
+    # We can draw it as a line that changes color along the path
+    cmap = plt.get_cmap('plasma')
+    colors = cmap(np.linspace(0, 1, len(pts) - 1))
+    
+    for i in range(len(pts) - 1):
+        ax.plot(pts[i:i+2, 0], pts[i:i+2, 1], pts[i:i+2, 2], color=colors[i], linewidth=1.5, alpha=0.8)
         
-        # Color each cell based on its position along the Hilbert curve
-        color = cmap(idx / len(pts))
-        rect = Rectangle((cx, cy), 1, 1, linewidth=0.5, edgecolor='#1e293b', facecolor=color, alpha=0.5)
-        ax.add_patch(rect)
+    # Highlight specific spatiotemporal partitions (e.g. split into 4 partitions)
+    # Draw bounding boxes for these partitions to show how they group in space-time!
+    n_partitions = 4
+    colors_parts = ['#38bdf8', '#fb7185', '#34d399', '#fbbf24']
+    pts_per_part = len(pts) // n_partitions
+    
+    for part_idx in range(n_partitions):
+        part_pts = pts[part_idx*pts_per_part : (part_idx+1)*pts_per_part]
         
-        # Draw the index number in the cell
-        ax.text(x, y, str(idx), color='white', ha='center', va='center', fontsize=8, weight='bold', alpha=0.8)
-    
-    # Plot the Hilbert curve path
-    ax.plot(pts[:, 0], pts[:, 1], color='#38bdf8', linewidth=2.5, alpha=0.9, label='Hilbert Curve Path')
-    
-    # Simulate a vessel track passing through the space-time curve
-    np.random.seed(42)
-    vessel_x = pts[:, 0] + np.random.normal(0, 0.15, size=len(pts))
-    vessel_y = pts[:, 1] + np.random.normal(0, 0.15, size=len(pts))
-    ax.scatter(vessel_x, vessel_y, color='#10b981', s=30, edgecolor='white', linewidth=0.5, label='Vessel GPS Pings', zorder=5)
-    ax.plot(vessel_x, vessel_y, color='#10b981', linewidth=1, linestyle='--', alpha=0.7, zorder=4)
-    
-    # Set bounds and styling
-    ax.set_xlim(-0.5, grid_size - 0.5)
-    ax.set_ylim(-0.5, grid_size - 0.5)
-    ax.set_xticks(np.arange(0, grid_size))
-    ax.set_yticks(np.arange(0, grid_size))
-    ax.grid(True, color='#1e293b', linestyle='-', linewidth=0.5)
-    
-    # Remove tick labels for a clean UI look
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    
-    # Titles and labels
-    ax.set_title('3D Spatio-Temporal Partitioning (2D Hilbert Projection)', color='white', fontsize=12, pad=15, weight='bold')
+        # Bounding box of this partition
+        min_coords = part_pts.min(axis=0) - 0.1
+        max_coords = part_pts.max(axis=0) + 0.1
+        
+        # Draw 3D wireframe box
+        for s, e in [
+            (min_coords, max_coords),
+        ]:
+            # X edges
+            ax.plot([min_coords[0], max_coords[0]], [min_coords[1], min_coords[1]], [min_coords[2], min_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            ax.plot([min_coords[0], max_coords[0]], [max_coords[1], max_coords[1]], [min_coords[2], min_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            ax.plot([min_coords[0], max_coords[0]], [min_coords[1], min_coords[1]], [max_coords[2], max_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            ax.plot([min_coords[0], max_coords[0]], [max_coords[1], max_coords[1]], [max_coords[2], max_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            
+            # Y edges
+            ax.plot([min_coords[0], min_coords[0]], [min_coords[1], max_coords[1]], [min_coords[2], min_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            ax.plot([max_coords[0], max_coords[0]], [min_coords[1], max_coords[1]], [min_coords[2], min_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            ax.plot([min_coords[0], min_coords[0]], [min_coords[1], max_coords[1]], [max_coords[2], max_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            ax.plot([max_coords[0], max_coords[0]], [min_coords[1], max_coords[1]], [max_coords[2], max_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            
+            # Z edges
+            ax.plot([min_coords[0], min_coords[0]], [min_coords[1], min_coords[1]], [min_coords[2], max_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            ax.plot([max_coords[0], max_coords[0]], [min_coords[1], min_coords[1]], [min_coords[2], max_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            ax.plot([min_coords[0], min_coords[0]], [max_coords[1], max_coords[1]], [min_coords[2], max_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            ax.plot([max_coords[0], max_coords[0]], [max_coords[1], max_coords[1]], [min_coords[2], max_coords[2]], color=colors_parts[part_idx], linestyle='--', linewidth=1.0, alpha=0.6)
+            
+        # Draw legend proxy
+        ax.plot([], [], [], color=colors_parts[part_idx], label=f'Spatio-Temporal Partition {part_idx+1}')
+
+    ax.set_title('3D Spatio-Temporal Hilbert Curve Partitioning (X, Y, T)', color='white', fontsize=14, pad=15, weight='bold')
     
     # Legend
     legend = ax.legend(facecolor='#0f172a', edgecolor='#1e293b', labelcolor='white', loc='upper right')
-    frame = legend.get_frame()
-    frame.set_alpha(0.8)
-    
+    if legend:
+        legend.get_frame().set_alpha(0.8)
+        
     # Save the output image
-    out_dir = Path('/home/fbaart/src/ais-shader/docs/images')
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(__file__).resolve().parent
     out_path = out_dir / 'hilbert_spaces.png'
     plt.savefig(out_path, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
     plt.close()
-    print(f"Successfully generated visualization at: {out_path}")
+    print(f"Successfully generated 3D Hilbert partitioning visualization at: {out_path}")
 
 if __name__ == '__main__':
     main()
