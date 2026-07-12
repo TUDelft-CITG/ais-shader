@@ -59,6 +59,21 @@ Estimates based on a full run of the US dataset, accounting for **data sparsity*
 
 > **Note**: "Probable Size" accounts for empty tiles being skipped. "Dense Size" (worst case) would be significantly higher (e.g., ~4.3 TB for Z14).
 
+### 6. Trajectorization Benchmarking & Optimizations
+We evaluated four strategies for re-partitioning vessel data for out-of-core Dask-based voyage segmentation (trajectorization) on Snellius:
+- **Strategy 1 (Direct Groupby-Apply)**: Groups partition data by MMSI directly. High memory usage and slow due to un-coordinated shuffling.
+- **Strategy 2 (Shuffle + Map)**: Shuffles rows using Dask's default index shuffle. Good performance (~145s) but high memory pressure (~6.8 GB).
+- **Strategy 3 (Set Index + Map)**: Set MMSI as index and partition. Raw speed champion (~140s) but memory intensive (~6.8 GB).
+- **Strategy 4 (SpatioTemporal Hilbert)**: Partitions space-time $(x, y, t)$ using a 3D Hilbert Curve with spatial-temporal halos. Uses **32% less memory** (~4.6 GB vs ~6.8 GB) with competitive runtimes (~202s).
+
+**Optimizations implemented for Strategy 4:**
+- **PyProj Vectorization**: Coordinate transformation center is calculated once per partition.
+- **Parquet Metadata Bounds**: Bypasses the slow `dask.compute` bounds calculation pass by reading file footer stats using PyArrow in under 10ms.
+- **1% Division Sampling**: Estimates partitioning boundaries on a 1% sample of the data to avoid exact quantile scanning.
+- **Zero-Copy Views**: Re-interprets `datetime64` pandas Series as raw integer views (`.values.view('int64') // 10**9`) to avoid type-casting overhead.
+
+Because of its high memory efficiency and scalability when processing multi-year high-resolution datasets, **Strategy 4 (SpatioTemporal Hilbert Curve)** is the default partitioning method.
+
 ## File Formats & Data Schemas
 
 This section documents the file formats and schemas consumed and produced by the `ais-shader` pipeline.

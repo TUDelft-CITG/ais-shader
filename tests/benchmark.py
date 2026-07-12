@@ -179,6 +179,7 @@ def run_benchmark_suite(
 
         # Define configurations to test
         configs = [
+            {"strategy": "Strategy 4 (SpatioTemporal Hilbert)", "shuffle_backend": "spatiotemporal"},
             {"strategy": "Strategy 2 (Shuffle + Map)", "shuffle_backend": "tasks"},
             {"strategy": "Strategy 2 (Shuffle + Map)", "shuffle_backend": "p2p"},
             {"strategy": "Strategy 2 (Shuffle + Map)", "shuffle_backend": "disk"},
@@ -208,6 +209,17 @@ def run_benchmark_suite(
                     res_ddf = run_strategy_1_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col)
                 elif backend == "set_index":
                     res_ddf = run_strategy_3_set_index_map(ddf, vessel_id_col, time_col, x_col, y_col)
+                elif backend == "spatiotemporal":
+                    res_ddf = trajectorize_dataframe(
+                        ddf=ddf,
+                        vessel_id_col=vessel_id_col,
+                        time_col=time_col,
+                        x_col=x_col,
+                        y_col=y_col,
+                        partition_method="spatiotemporal",
+                        hilbert_p=16,
+                        dataset_path=dataset_path
+                    )
                 else:
                     # Strategy 2 (Shuffle + MapPartitions)
                     res_ddf = trajectorize_dataframe(
