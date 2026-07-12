@@ -14,15 +14,28 @@ from ais_shader.moving_dask.trajectory import encode_3d_hilbert_numpy
 def main():
     dataset_path = '/projects/prjs2131/data/marine-cadastre/ais_2025_12'
     
-    # 1. Read first file of the dataset to get actual coordinates
-    print("Reading sample coordinates from US AIS dataset...")
-    pfile = list(Path(dataset_path).glob("*.parquet"))[0]
-    df = pq.read_table(pfile, columns=['longitude', 'latitude', 'base_date_time']).to_pandas()
-    
-    # Clean up empty values and sample 20,000 points
-    df = df.dropna(subset=['longitude', 'latitude', 'base_date_time'])
-    df = df[(df['longitude'] >= -125) & (df['longitude'] <= -70) & (df['latitude'] >= 24) & (df['latitude'] <= 48)]
-    df = df.sample(n=min(20000, len(df)), random_state=42)
+    # 1. Read a subset of rows from multiple parquet files to cover a wider temporal range (e.g. 15 days)
+    print("Reading sample coordinates across multiple US AIS dataset files...")
+    files = sorted(list(Path(dataset_path).glob("*.parquet")))
+    dfs = []
+    # Read from the first 15 files to get a representative multi-day sample
+    for pfile in files[:15]:
+        try:
+            tbl = pq.read_table(pfile, columns=['longitude', 'latitude', 'base_date_time'])
+            df_part = tbl.to_pandas().dropna(subset=['longitude', 'latitude', 'base_date_time'])
+            # Filter to main US continental area to make the map look nice
+            df_part = df_part[(df_part['longitude'] >= -125) & (df_part['longitude'] <= -70) & (df_part['latitude'] >= 24) & (df_part['latitude'] <= 48)]
+            if not df_part.empty:
+                df_part = df_part.sample(n=min(1500, len(df_part)), random_state=42)
+                dfs.append(df_part)
+        except Exception as e:
+            print(f"Skipping {pfile.name} due to: {e}")
+            
+    if not dfs:
+        raise ValueError("Could not read any coordinates from the dataset files.")
+        
+    df = pd.concat(dfs, ignore_index=True)
+    print(f"Loaded {len(df)} sample coordinates across {len(dfs)} files.")
     
     # 2. Get global bounds
     x_min, x_max = -125.0, -70.0
