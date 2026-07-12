@@ -81,50 +81,54 @@ def _calculate_rolling_hull_area(points_array):
         raise ImportError("The compiled C++ extension '_cgal_hull' is not available. Please compile the extensions first.")
     return _cgal_hull.convex_hull_area_2(points_array)
 
-def encode_3d_hilbert_numpy(coords: np.ndarray, p: int) -> np.ndarray:
-    """
-    Vectorized 3D Hilbert Curve encoding for NumPy arrays.
-    coords: np.ndarray of shape (N, 3) with integer values in [0, 2^p - 1].
-    p: number of bits (order of Hilbert curve).
-    """
-    N = coords.shape[0]
-    point = coords.copy().astype(np.int64)
+def encode_2d_hilbert_numpy(x: np.ndarray, y: np.ndarray, p: int) -> np.ndarray:
+    """Vectorized 2D Hilbert Curve encoding for spatial coordinates."""
+    N = len(x)
+    x_coords = x.copy().astype(np.int64)
+    y_coords = y.copy().astype(np.int64)
     
     m = 1 << (p - 1)
-    
     q = m
     while q > 1:
         p_val = q - 1
-        for i in range(3):
-            mask = (point[:, i] & q) > 0
-            point[mask, 0] ^= p_val
-            
-            not_mask = ~mask
-            t = (point[not_mask, 0] ^ point[not_mask, i]) & p_val
-            point[not_mask, 0] ^= t
-            point[not_mask, i] ^= t
+        
+        # x-dimension rotation
+        mask_x = (x_coords & q) > 0
+        x_coords[mask_x] ^= p_val
+        
+        # y-dimension rotation
+        not_mask_x = ~mask_x
+        t = (x_coords[not_mask_x] ^ y_coords[not_mask_x]) & p_val
+        x_coords[not_mask_x] ^= t
+        y_coords[not_mask_x] ^= t
+        
         q >>= 1
         
-    for i in range(1, 3):
-        point[:, i] ^= point[:, i - 1]
-        
-    t = np.zeros(N, dtype=np.int64)
-    q = m
-    while q > 1:
-        mask = (point[:, 2] & q) > 0
-        t[mask] ^= (q - 1)
-        q >>= 1
-        
-    for i in range(3):
-        point[:, i] ^= t
-        
+    y_coords ^= x_coords
+    
     h_int = np.zeros(N, dtype=np.int64)
     for bit in range(p - 1, -1, -1):
-        for dim in range(3):
-            b = (point[:, dim] >> bit) & 1
-            h_int = (h_int << 1) | b
-            
+        bx = (x_coords >> bit) & 1
+        by = (y_coords >> bit) & 1
+        h_int = (h_int << 2) | (by << 1) | bx
+        
     return h_int
+
+def encode_3d_hilbert_numpy(coords: np.ndarray, p: int) -> np.ndarray:
+    """
+    Spatially-dominant 3D space-time curve.
+    Uses a 2D Hilbert curve for the spatial (x, y) coordinates to preserve
+    clean, non-overlapping spatial partition boundaries, and appends the
+    temporal coordinate (t) as the least significant bits to sort chronologically
+    within spatial regions.
+    """
+    x = coords[:, 0]
+    y = coords[:, 1]
+    t = coords[:, 2]
+    
+    spatial_index = encode_2d_hilbert_numpy(x, y, p)
+    
+    return (spatial_index << p) | t
 
 def add_hilbert_index(
     df: pd.DataFrame,

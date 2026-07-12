@@ -12,8 +12,13 @@ The AIS Visualization pipeline is designed to process massive datasets (10GB+) o
 
 ## Architectural Considerations
 
-### 1. Spatial Partitioning
-Raw AIS data is often unsorted. To enable efficient rendering, we first preprocess the data into spatially partitioned GeoParquet files. This allows Dask to load only the relevant data chunks for each tile, significantly reducing memory usage and I/O.
+### 1. Spatial & Spatio-Temporal Partitioning
+Raw AIS data is often unsorted. To enable efficient processing and rendering:
+* **Spatial Partitioning for Tiles**: We preprocess raw data into spatially partitioned GeoParquet files so Dask can load only the relevant spatial chunks for each map tile, drastically reducing memory usage and I/O.
+* **Spatio-Temporal Partitioning for Trajectorization**: During voyage segmentation and feature extraction (`trajectorize` command), we sort and partition coordinates using a **Spatially-Dominant (Space-First) Space-Time Index**. 
+  1. **Spatial 2D Hilbert Curve ($p=16$)**: Maps the spatial $(x, y)$ coordinates to a 1D scalar, ensuring that partition boundaries in 2D space are strictly contiguous and non-overlapping.
+  2. **Temporal Suffix**: We left-shift the spatial index and append the time coordinate $t$ as the least significant bits. 
+  This prioritizes spatial separation first, preventing spatial regions from overlapping on the map, while still sorting points chronologically within each region. Active ports (like NYC) are split temporally by date only if they exceed Dask partition size thresholds.
 
 ### 2. The "Global Max" Problem
 To create a seamless map where colors mean the same thing across all tiles, we must normalize pixel values against a **global maximum** density.
