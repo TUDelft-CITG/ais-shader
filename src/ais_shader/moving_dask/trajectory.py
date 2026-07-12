@@ -120,7 +120,7 @@ def add_hilbert_index(
     
     xs = df[x_col].values
     ys = df[y_col].values
-    ts = df[time_col].values.view('int64') // 10**9
+    ts = df[time_col].astype('datetime64[s]').astype('int64').values
     
     xd = x_max - x_min if x_max != x_min else 1.0
     yd = y_max - y_min if y_max != y_min else 1.0

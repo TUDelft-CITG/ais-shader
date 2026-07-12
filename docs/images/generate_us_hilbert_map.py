@@ -52,7 +52,7 @@ def main():
     
     xs = df['longitude'].values
     ys = df['latitude'].values
-    ts = df['base_date_time'].values.view('int64') // 10**9
+    ts = df['base_date_time'].astype('datetime64[s]').astype('int64').values
     
     xd = x_max - x_min
     yd = y_max - y_min
