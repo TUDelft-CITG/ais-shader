@@ -74,6 +74,8 @@ We evaluated four strategies for re-partitioning vessel data for out-of-core Das
 
 Because of its high memory efficiency and scalability when processing multi-year high-resolution datasets, **Strategy 4 (SpatioTemporal Hilbert Curve)** is the default partitioning method.
 
+![Spatio-Temporal Hilbert spaces projection of US Coastline](images/us_hilbert_spaces.png)
+
 ## File Formats & Data Schemas
 
 This section documents the file formats and schemas consumed and produced by the `ais-shader` pipeline.
