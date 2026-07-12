@@ -130,15 +130,9 @@ def main():
                            facecolor=color, alpha=0.08, linestyle='-')
             ax.add_patch(poly)
         
-        # Determine temporal scale (use 10th to 90th percentile to show the core temporal range of the partition)
-        days = part_df['base_date_time'].dt.day.values
-        start_day = int(np.percentile(days, 10))
-        end_day = int(np.percentile(days, 90))
-        
-        # Fallback if percentile calculation yields identical bounds for very narrow ranges
-        if start_day == end_day:
-            start_day = int(part_df['base_date_time'].min().day)
-            end_day = int(part_df['base_date_time'].max().day)
+        # Determine temporal scale (use the absolute min/max days to show the full temporal extent of the partition)
+        start_day = int(part_df['base_date_time'].min().day)
+        end_day = int(part_df['base_date_time'].max().day)
             
         label_text = f"P{part_id}\n{start_day}d-{end_day}d"
         
