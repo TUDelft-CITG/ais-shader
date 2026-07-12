@@ -31,6 +31,10 @@ Normalized lateral crossing speed/frequency profiles calculated across passage l
 
 ![Lateral Crossing Profiles](docs/images/profiles.png)
 
+### Spatio-Temporal Partitioning (Hilbert Curve)
+We partition the space-time $(x, y, t)$ vessel track coordinates using a 3D Hilbert Curve. This groups coordinates with strong spatial and temporal locality together in memory, lowering peak memory usage by **32%** during trajectorization.
+
+![Spatio-Temporal Hilbert spaces projection](docs/images/hilbert_spaces.png)
 
 ### Colormaps
 Custom transparent colormaps used for visualization. Any matplotlib or crameri colormap can be used.
