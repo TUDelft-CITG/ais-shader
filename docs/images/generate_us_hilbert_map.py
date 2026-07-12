@@ -92,15 +92,12 @@ def main():
             
         # Determine temporal group and color palette
         if rank < band_size:
-            # Early Phase (Cyan/Teal)
             color = plt.get_cmap('cool')(rank / band_size * 0.4)
             group_label = "Early Dec (T-Band 1)"
         elif rank < 2 * band_size:
-            # Mid Phase (Magenta/Purple)
             color = plt.get_cmap('plasma')(0.3 + (rank - band_size) / band_size * 0.4)
             group_label = "Mid Dec (T-Band 2)"
         else:
-            # Late Phase (Orange/Yellow/Green)
             color = plt.get_cmap('spring')((rank - 2*band_size) / (n_valid - 2*band_size) * 0.5 + 0.3)
             group_label = "Late Dec (T-Band 3)"
             
@@ -116,22 +113,25 @@ def main():
             try:
                 hull = ConvexHull(points)
                 hull_points = points[hull.vertices]
-                
-                # Draw convex hull polygon
                 poly = Polygon(hull_points, linewidth=1.2, edgecolor=color,
                                facecolor=color, alpha=0.08, linestyle='-')
                 ax.add_patch(poly)
             except Exception:
                 pass
         
+        # Determine temporal scale (day start - day stop, rounded to integers)
+        start_day = int(part_df['base_date_time'].min().day)
+        end_day = int(part_df['base_date_time'].max().day)
+        label_text = f"P{part_id}\n{start_day}d-{end_day}d"
+        
         # Draw label at partition centroid
         cx = part_df['longitude'].mean()
         cy = part_df['latitude'].mean()
-        ax.text(cx, cy, f"P{part_id}", color='white', fontsize=7, weight='bold',
-                bbox=dict(facecolor=color, edgecolor='none', boxstyle='round,pad=0.15', alpha=0.7))
+        ax.text(cx, cy, label_text, color='white', fontsize=6, weight='bold', ha='center', va='center',
+                bbox=dict(facecolor=color, edgecolor='none', boxstyle='round,pad=0.15', alpha=0.85))
                 
     # Labels & Title
-    ax.set_title('3D Spatio-Temporal Partitioning over US Coastline (32 Convex Hull Partitions, 3 Temporal Bands)', color='white', fontsize=14, weight='bold', pad=15)
+    ax.set_title('3D Spatio-Temporal Partitioning over US Coastline (Convex Hull Partition Hulls + Time Annotations)', color='white', fontsize=14, weight='bold', pad=15)
     ax.set_xlabel('Longitude (Degrees)', color='#94a3b8')
     ax.set_ylabel('Latitude (Degrees)', color='#94a3b8')
     
@@ -154,7 +154,7 @@ def main():
     out_path = out_dir / 'us_hilbert_spaces.png'
     plt.savefig(out_path, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
     plt.close()
-    print(f"Successfully generated US convex hull partitioning visualization at: {out_path}")
+    print(f"Successfully generated US convex hull partitioning visualization with temporal tags at: {out_path}")
 
 if __name__ == '__main__':
     main()
