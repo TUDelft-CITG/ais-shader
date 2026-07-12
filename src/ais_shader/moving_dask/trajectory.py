@@ -81,39 +81,6 @@ def _calculate_rolling_hull_area(points_array):
         raise ImportError("The compiled C++ extension '_cgal_hull' is not available. Please compile the extensions first.")
     return _cgal_hull.convex_hull_area_2(points_array)
 
-def encode_2d_hilbert_numpy(x: np.ndarray, y: np.ndarray, p: int) -> np.ndarray:
-    """Vectorized 2D Hilbert Curve encoding for spatial coordinates."""
-    N = len(x)
-    x_coords = x.copy().astype(np.int64)
-    y_coords = y.copy().astype(np.int64)
-    
-    m = 1 << (p - 1)
-    q = m
-    while q > 1:
-        p_val = q - 1
-        
-        # x-dimension rotation
-        mask_x = (x_coords & q) > 0
-        x_coords[mask_x] ^= p_val
-        
-        # y-dimension rotation
-        not_mask_x = ~mask_x
-        t = (x_coords[not_mask_x] ^ y_coords[not_mask_x]) & p_val
-        x_coords[not_mask_x] ^= t
-        y_coords[not_mask_x] ^= t
-        
-        q >>= 1
-        
-    y_coords ^= x_coords
-    
-    h_int = np.zeros(N, dtype=np.int64)
-    for bit in range(p - 1, -1, -1):
-        bx = (x_coords >> bit) & 1
-        by = (y_coords >> bit) & 1
-        h_int = (h_int << 2) | (by << 1) | bx
-        
-    return h_int
-
 def encode_3d_hilbert_numpy(coords: np.ndarray, p: int) -> np.ndarray:
     """
     Spatially-dominant 3D space-time curve.
@@ -122,11 +89,12 @@ def encode_3d_hilbert_numpy(coords: np.ndarray, p: int) -> np.ndarray:
     temporal coordinate (t) as the least significant bits to sort chronologically
     within spatial regions.
     """
-    x = coords[:, 0]
-    y = coords[:, 1]
-    t = coords[:, 2]
+    from dask_geopandas.hilbert_distance import _encode as encode_2d_hilbert
+    x = coords[:, 0].astype(np.uint32)
+    y = coords[:, 1].astype(np.uint32)
+    t = coords[:, 2].astype(np.int64)
     
-    spatial_index = encode_2d_hilbert_numpy(x, y, p)
+    spatial_index = encode_2d_hilbert(p, x, y).astype(np.int64)
     
     return (spatial_index << p) | t
 

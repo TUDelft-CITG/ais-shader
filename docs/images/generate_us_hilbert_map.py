@@ -65,8 +65,8 @@ def main():
     coords = np.column_stack((x_int, y_int, t_int))
     df['hilbert_index'] = encode_3d_hilbert_numpy(coords, p)
     
-    # 4. Partition points using quantiles (32 partitions)
-    n_partitions = 32
+    # 4. Partition points using quantiles (128 partitions)
+    n_partitions = 128
     quantiles = np.linspace(0, 1, n_partitions + 1)
     divisions = list(df['hilbert_index'].quantile(quantiles))
     divisions = sorted(list(set(divisions)))
