@@ -17,9 +17,8 @@ def main():
     # 1. Read a subset of rows from multiple parquet files to cover a wider temporal range (e.g. 15 days)
     print("Reading sample coordinates across multiple US AIS dataset files...")
     files = sorted(list(Path(dataset_path).glob("*.parquet")))
-    # Stride across all files to get a representative temporal range from the entire month
-    stride = max(1, len(files) // 15)
-    selected_files = files[::stride][:15]
+    # Read from all files to cover the entire dataset
+    selected_files = files
     dfs = []
     for pfile in selected_files:
         try:
@@ -27,7 +26,7 @@ def main():
             df_part = tbl.to_pandas().dropna(subset=['longitude', 'latitude', 'base_date_time'])
             df_part = df_part[(df_part['longitude'] >= -125) & (df_part['longitude'] <= -70) & (df_part['latitude'] >= 24) & (df_part['latitude'] <= 48)]
             if not df_part.empty:
-                df_part = df_part.sample(n=min(1500, len(df_part)), random_state=42)
+                df_part = df_part.sample(n=min(5000, len(df_part)), random_state=42)
                 dfs.append(df_part)
         except Exception as e:
             print(f"Skipping {pfile.name} due to: {e}")
@@ -48,7 +47,7 @@ def main():
     t_max_epoch = t_max.timestamp()
     
     # 3. Compute 3D Hilbert Coordinates & Index
-    p = 6  # Order 6 provides good spatial granularity (64x64 grid)
+    p = 16  # Order 16 matches the main application's spatial granularity
     grid_size = (1 << p) - 1
     
     xs = df['longitude'].values
@@ -82,19 +81,19 @@ def main():
     fig.patch.set_facecolor('#0f172a')  # Slate-900 background
     ax.set_facecolor('#0f172a')
     
-    # Group partitions by their temporal centroids into 3 phases
-    part_times = []
+    # Group partitions by their spatial centroids (mean longitude) to color them spatially
+    part_lons = []
     for part_id in range(n_partitions):
         part_df = df[df['partition'] == part_id]
         if not part_df.empty:
-            mean_time = part_df['base_date_time'].mean()
-            part_times.append((part_id, mean_time))
+            mean_lon = part_df['longitude'].mean()
+            part_lons.append((part_id, mean_lon))
             
-    # Sort partitions temporally
-    part_times.sort(key=lambda x: x[1])
-    sorted_parts = [x[0] for x in part_times]
+    # Sort partitions spatially (West to East)
+    part_lons.sort(key=lambda x: x[1])
+    sorted_parts = [x[0] for x in part_lons]
     
-    # Divide into 3 temporal bands
+    # Divide into 3 spatial bands
     n_valid = len(sorted_parts)
     band_size = n_valid // 3
     
@@ -105,16 +104,16 @@ def main():
         if part_df.empty:
             continue
             
-        # Determine temporal group and color palette
+        # Determine spatial group and color palette
         if rank < band_size:
             color = plt.get_cmap('cool')(rank / band_size * 0.4)
-            group_label = "Early Dec (T-Band 1)"
+            group_label = "West Coast / Pacific (Band 1)"
         elif rank < 2 * band_size:
             color = plt.get_cmap('plasma')(0.3 + (rank - band_size) / band_size * 0.4)
-            group_label = "Mid Dec (T-Band 2)"
+            group_label = "Central / Gulf Coast (Band 2)"
         else:
             color = plt.get_cmap('spring')((rank - 2*band_size) / (n_valid - 2*band_size) * 0.5 + 0.3)
-            group_label = "Late Dec (T-Band 3)"
+            group_label = "East Coast / Atlantic (Band 3)"
             
         # Plot points of this partition (small dots)
         ax.scatter(part_df['longitude'], part_df['latitude'], 
