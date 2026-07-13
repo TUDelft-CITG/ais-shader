@@ -53,7 +53,7 @@ class ClusterMemoryTracker:
         self.thread.join()
         return self.peak_memory
 
-def run_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col):
+def trajectorize_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col):
     """Direct Dask groupby-apply without pre-shuffling."""
     meta = ddf._meta.copy()
     meta[time_col] = pd.to_datetime(meta[time_col])
@@ -83,7 +83,7 @@ def run_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col):
     result = ddf.groupby(vessel_id_col, group_keys=False).apply(process_group, meta=meta)
     return result
 
-def run_set_index_map(ddf, vessel_id_col, time_col, x_col, y_col):
+def trajectorize_set_index_map(ddf, vessel_id_col, time_col, x_col, y_col):
     """Dask set_index followed by map_partitions."""
     ddf_indexed = ddf.set_index(vessel_id_col)
     
@@ -206,9 +206,9 @@ def run_benchmark_suite(
             try:
                 # Select the computation based on strategy
                 if backend == "groupby_apply":
-                    res_ddf = run_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col)
+                    res_ddf = trajectorize_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col)
                 elif backend == "set_index":
-                    res_ddf = run_set_index_map(ddf, vessel_id_col, time_col, x_col, y_col)
+                    res_ddf = trajectorize_set_index_map(ddf, vessel_id_col, time_col, x_col, y_col)
                 elif backend == "spatiotemporal":
                     res_ddf = trajectorize_dataframe(
                         ddf=ddf,
