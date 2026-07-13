@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --partition=rome
-#SBATCH --nodes=2
+#SBATCH --partition=staging
+#SBATCH --nodes=1
 #SBATCH --tasks-per-node=1
-#SBATCH --cpus-per-task=128
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=120G
-#SBATCH --time=04:00:00
+#SBATCH --time=00:30:00
 #SBATCH --job-name=ais-benchmark
 #SBATCH --output=ais_benchmark_%j.log
 
@@ -21,11 +21,11 @@ SCHEDULER_PID=$!
 sleep 5
 
 # 2. Start Dask Workers on all nodes using srun
-# We start 4 worker processes per node, each running 32 threads (totalling 128 cores per node)
+# We start 4 worker processes per node, each running 8 threads (totalling 32 cores per node)
 # Each worker is allocated memory-limit of 28GB (totalling 112GB per node)
 echo "Starting Dask Workers across allocated nodes..."
 srun uv run dask-worker ${SCHEDULER_URL} \
-    --nthreads 32 \
+    --nthreads 8 \
     --nworkers 4 \
     --memory-limit 28GB \
     --no-dashboard &

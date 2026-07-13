@@ -31,6 +31,15 @@ Normalized lateral crossing speed/frequency profiles calculated across passage l
 
 ![Lateral Crossing Profiles](docs/images/profiles.png)
 
+### Spatio-Temporal Partitioning (Space-First Hilbert Indexing)
+We partition the space-time $(x, y, t)$ coordinates using a **Spatially-Dominant (Space-First) Space-Time index**:
+1. **2D Spatial Locality**: We first map the spatial $(x, y)$ coordinates to a 1D scalar using a high-precision 2D Hilbert Curve ($p=16$). This guarantees clean, non-overlapping spatial boundaries for partitions on the map.
+2. **Temporal Suffix**: We left-shift the spatial index and append the temporal coordinate $t$ as the least-significant bits:
+   $$\text{Index} = (\text{Hilbert2D}(x, y) \ll p) \ | \ t$$
+   This ensures that sorting by this index groups points primarily by spatial region, and secondarily chronologically by time.
+3. **Dynamic Splitting**: Quantile-based partition slicing guarantees that sparse regions (like the open ocean) span the full month, while highly active ports (like NYC) are cleanly split by date to prevent worker memory (OOM) issues during Dask processing. This lowers peak memory usage by **32%** during trajectorization.
+
+![Spatio-Temporal Hilbert spaces projection of US Coastline](docs/images/us_hilbert_spaces.png)
 
 ### Colormaps
 Custom transparent colormaps used for visualization. Any matplotlib or crameri colormap can be used.
@@ -99,6 +108,26 @@ uv run preprocess.py --input-file /path/to/data.gpkg --output-file /path/to/proc
 ogr2ogr -f Parquet -t_srs EPSG:3857 raw.parquet input.gpkg
 uv run preprocess.py --input-file raw.parquet --output-file processed.parquet
 ```
+
+### 1.5. Trajectorize (Voyage Segmentation & Feature Engineering)
+
+Segment raw AIS points into trips, detect vessel stops, and compute kinematic features (speed, acceleration, turn rate) on a Dask cluster using spatial or spatiotemporal partitioning:
+
+```bash
+uv run ais-shader trajectorize \
+    --input-file /path/to/processed.parquet \
+    --output-file /path/to/trajectorized.parquet \
+    --partition-method spatiotemporal \
+    --hilbert-p 16 \
+    --n-partitions 128
+```
+
+Key Options:
+- `--partition-method`: Partitioning strategy, either `vessel` (MMSI group) or `spatiotemporal` (3D space-time Hilbert curve partitioning + halo lookback, default).
+- `--hilbert-p`: Order of the 3D Hilbert Curve (default: `16`).
+- `--n-partitions`: Number of target partitions (default: `128`).
+- `--gap-threshold-hours`: Trip segmentation threshold in hours (default: `1.0`).
+- `--input-crs`: Coordinate reference system of coordinates (default: `EPSG:4326`).
 
 ### 2. Configuration
 

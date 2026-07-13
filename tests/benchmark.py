@@ -53,8 +53,8 @@ class ClusterMemoryTracker:
         self.thread.join()
         return self.peak_memory
 
-def run_strategy_1_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col):
-    """Strategy 1: Direct Dask groupby-apply without pre-shuffling."""
+def trajectorize_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col):
+    """Direct Dask groupby-apply without pre-shuffling."""
     meta = ddf._meta.copy()
     meta[time_col] = pd.to_datetime(meta[time_col])
     meta['time_diff_s'] = pd.Series(dtype='float64')
@@ -83,8 +83,8 @@ def run_strategy_1_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col):
     result = ddf.groupby(vessel_id_col, group_keys=False).apply(process_group, meta=meta)
     return result
 
-def run_strategy_3_set_index_map(ddf, vessel_id_col, time_col, x_col, y_col):
-    """Strategy 3: Dask set_index followed by map_partitions."""
+def trajectorize_set_index_map(ddf, vessel_id_col, time_col, x_col, y_col):
+    """Dask set_index followed by map_partitions."""
     ddf_indexed = ddf.set_index(vessel_id_col)
     
     # Meta schema
@@ -179,11 +179,12 @@ def run_benchmark_suite(
 
         # Define configurations to test
         configs = [
-            {"strategy": "Strategy 2 (Shuffle + Map)", "shuffle_backend": "tasks"},
-            {"strategy": "Strategy 2 (Shuffle + Map)", "shuffle_backend": "p2p"},
-            {"strategy": "Strategy 2 (Shuffle + Map)", "shuffle_backend": "disk"},
-            {"strategy": "Strategy 3 (Set Index + Map)", "shuffle_backend": "set_index"},
-            {"strategy": "Strategy 1 (Direct Groupby-Apply)", "shuffle_backend": "groupby_apply"},
+            {"strategy": "SpatioTemporal Hilbert Partitioning", "shuffle_backend": "spatiotemporal"},
+            {"strategy": "Vessel Partitioning (Dask Tasks Shuffle)", "shuffle_backend": "tasks"},
+            {"strategy": "Vessel Partitioning (Dask P2P Shuffle)", "shuffle_backend": "p2p"},
+            {"strategy": "Vessel Partitioning (Dask Disk Shuffle)", "shuffle_backend": "disk"},
+            {"strategy": "Vessel Index Partitioning (Set Index)", "shuffle_backend": "set_index"},
+            {"strategy": "Direct Groupby-Apply", "shuffle_backend": "groupby_apply"},
         ]
 
         run_count = 0
@@ -205,9 +206,20 @@ def run_benchmark_suite(
             try:
                 # Select the computation based on strategy
                 if backend == "groupby_apply":
-                    res_ddf = run_strategy_1_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col)
+                    res_ddf = trajectorize_groupby_apply(ddf, vessel_id_col, time_col, x_col, y_col)
                 elif backend == "set_index":
-                    res_ddf = run_strategy_3_set_index_map(ddf, vessel_id_col, time_col, x_col, y_col)
+                    res_ddf = trajectorize_set_index_map(ddf, vessel_id_col, time_col, x_col, y_col)
+                elif backend == "spatiotemporal":
+                    res_ddf = trajectorize_dataframe(
+                        ddf=ddf,
+                        vessel_id_col=vessel_id_col,
+                        time_col=time_col,
+                        x_col=x_col,
+                        y_col=y_col,
+                        partition_method="spatiotemporal",
+                        hilbert_p=16,
+                        dataset_path=dataset_path
+                    )
                 else:
                     # Strategy 2 (Shuffle + MapPartitions)
                     res_ddf = trajectorize_dataframe(

@@ -282,10 +282,23 @@ def analyze_passage(passage_file, ais_dir, output_file, max_time_gap, scheduler)
     default="EPSG:4326",
     help="Coordinate reference system of the input coordinates.",
 )
-def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions, input_crs, gap_threshold_hours):
+@click.option(
+    "--partition-method",
+    type=click.Choice(["vessel", "spatiotemporal"]),
+    default="spatiotemporal",
+    help="Partitioning method to use.",
+)
+@click.option(
+    "--hilbert-p",
+    type=int,
+    default=16,
+    help="Hilbert curve resolution order.",
+)
+def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions, input_crs, gap_threshold_hours, partition_method, hilbert_p):
     """
     Voyage segmentation and feature engineering on Dask.
     """
+    import dask_geopandas
     from dask.distributed import Client
     import dask.dataframe as dd
     from .moving_dask.trajectory import trajectorize_dataframe
@@ -297,13 +310,8 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
         
     try:
         logger.info(f"Reading input from {input_file}...")
-        try:
-            import dask_geopandas
-            ddf = dask_geopandas.read_parquet(input_file)
-        except Exception:
-            logger.info("Failed to read with dask_geopandas, falling back to standard dask dataframe...")
-            ddf = dd.read_parquet(input_file)
-        
+        ddf = dask_geopandas.read_parquet(input_file)
+
         # Run pipeline
         res_ddf = trajectorize_dataframe(
             ddf=ddf,
@@ -314,11 +322,14 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
             gap_threshold_hours=gap_threshold_hours,
             shuffle_backend=shuffle_backend,
             n_partitions=n_partitions,
-            input_crs=input_crs
+            input_crs=input_crs,
+            partition_method=partition_method,
+            hilbert_p=hilbert_p,
+            dataset_path=input_file
         )
-        
+
         logger.info(f"Saving trajectorized dataset to {output_file}...")
-        res_ddf.to_parquet(output_file, overwrite=True)
+        res_ddf.to_geoparquet(output_file, overwrite=True)
         logger.info("Trajectorization complete!")
     finally:
         client.close()

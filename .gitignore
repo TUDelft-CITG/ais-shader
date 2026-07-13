@@ -177,3 +177,6 @@ mlflow.db
 
 # Snellius local test runners
 scripts/snellius/process_rws.sh
+
+# Generated visualization images
+docs/images/hilbert_spaces.png

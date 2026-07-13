@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+import geopandas as gpd
+import dask_geopandas
 import dask.dataframe as dd
 from dask.distributed import Client
 import pytest
@@ -112,7 +114,8 @@ def test_trajectorize_dataframe():
         }
         
         df = pd.DataFrame(data)
-        ddf = dd.from_pandas(df, npartitions=2)
+        gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['longitude'], df['latitude']), crs="EPSG:4326")
+        ddf = dask_geopandas.from_geopandas(gdf, npartitions=2)
         
         # Run Dask trajectorize
         res_ddf = trajectorize_dataframe(
@@ -124,7 +127,8 @@ def test_trajectorize_dataframe():
             gap_threshold_hours=0.25, # 15 minutes gap threshold
             stop_duration_min=15.0,
             stop_radius_m=2000.0,      # Huge stop radius to trigger stops easily
-            shuffle_backend='tasks'
+            shuffle_backend='tasks',
+            partition_method='vessel'
         )
         
         res_df = res_ddf.compute()
@@ -144,3 +148,79 @@ def test_trajectorize_dataframe():
         
     finally:
         client.close()
+
+
+def test_trajectorize_spatiotemporal():
+    # Start Dask Local Cluster for test
+    client = Client(asynchronous=False, dashboard_address=None, processes=False, n_workers=1, threads_per_worker=1)
+    
+    try:
+        data = {
+            'mmsi': [1, 1, 1, 1, 1, 2, 2, 2],
+            'base_date_time': [
+                '2025-12-01 00:00:00',
+                '2025-12-01 00:05:00',
+                '2025-12-01 00:10:00',
+                '2025-12-01 00:30:00',
+                '2025-12-01 00:40:00',
+                '2025-12-01 00:00:00',
+                '2025-12-01 00:05:00',
+                '2025-12-01 00:10:00'
+            ],
+            'longitude': [
+                0.0, 0.00001, 0.0, 0.05, 0.1,  # V1
+                2.0, 2.01, 2.02                # V2
+            ],
+            'latitude': [
+                0.0, 0.0, 0.00001, 0.05, 0.1,  # V1
+                4.0, 4.01, 4.02                # V2
+            ],
+            'cog': [0.0, 0.0, 0.0, 45.0, 45.0, 10.0, 10.0, 10.0],
+            'heading': [0, 0, 0, 45, 45, 10, 10, 10],
+            'sog': [0.0, 0.1, 0.0, 15.0, 15.0, 10.0, 10.0, 10.0]
+        }
+        
+        df = pd.DataFrame(data)
+        gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['longitude'], df['latitude']), crs="EPSG:4326")
+        ddf = dask_geopandas.from_geopandas(gdf, npartitions=2)
+        
+        global_bounds = {
+            "x_min": 0.0,
+            "x_max": 2.5,
+            "y_min": 0.0,
+            "y_max": 4.5,
+            "t_min": pd.to_datetime('2025-12-01 00:00:00'),
+            "t_max": pd.to_datetime('2025-12-01 00:45:00')
+        }
+
+        # Run Dask trajectorize with spatiotemporal partitioning
+        res_ddf = trajectorize_dataframe(
+            ddf=ddf,
+            vessel_id_col='mmsi',
+            time_col='base_date_time',
+            x_col='longitude',
+            y_col='latitude',
+            gap_threshold_hours=0.25, # 15 minutes gap threshold
+            stop_duration_min=15.0,
+            stop_radius_m=2000.0,      # Huge stop radius to trigger stops easily
+            shuffle_backend='tasks',
+            partition_method='spatiotemporal',
+            n_partitions=2,
+            global_bounds=global_bounds
+        )
+        
+        res_df = res_ddf.compute()
+        
+        assert 'trip_id' in res_df.columns
+        assert 'speed_mps' in res_df.columns
+        assert 'rolling_area_m2' in res_df.columns
+        
+        v1_trips = res_df[res_df['mmsi'] == 1]['trip_id'].unique()
+        v2_trips = res_df[res_df['mmsi'] == 2]['trip_id'].unique()
+        
+        assert len(v1_trips) > 1, f"Expected multiple trips for Vessel 1, got {v1_trips}"
+        assert len(v2_trips) == 1, f"Expected 1 trip for Vessel 2, got {v2_trips}"
+        
+    finally:
+        client.close()
+

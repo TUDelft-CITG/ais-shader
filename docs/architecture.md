@@ -12,8 +12,13 @@ The AIS Visualization pipeline is designed to process massive datasets (10GB+) o
 
 ## Architectural Considerations
 
-### 1. Spatial Partitioning
-Raw AIS data is often unsorted. To enable efficient rendering, we first preprocess the data into spatially partitioned GeoParquet files. This allows Dask to load only the relevant data chunks for each tile, significantly reducing memory usage and I/O.
+### 1. Spatial & Spatio-Temporal Partitioning
+Raw AIS data is often unsorted. To enable efficient processing and rendering:
+* **Spatial Partitioning for Tiles**: We preprocess raw data into spatially partitioned GeoParquet files so Dask can load only the relevant spatial chunks for each map tile, drastically reducing memory usage and I/O.
+* **Spatio-Temporal Partitioning for Trajectorization**: During voyage segmentation and feature extraction (`trajectorize` command), we sort and partition coordinates using a **Spatially-Dominant (Space-First) Space-Time Index**. 
+  1. **Spatial 2D Hilbert Curve ($p=16$)**: Maps the spatial $(x, y)$ coordinates to a 1D scalar, ensuring that partition boundaries in 2D space are strictly contiguous and non-overlapping.
+  2. **Temporal Suffix**: We left-shift the spatial index and append the time coordinate $t$ as the least significant bits. 
+  This prioritizes spatial separation first, preventing spatial regions from overlapping on the map, while still sorting points chronologically within each region. Active ports (like NYC) are split temporally by date only if they exceed Dask partition size thresholds.
 
 ### 2. The "Global Max" Problem
 To create a seamless map where colors mean the same thing across all tiles, we must normalize pixel values against a **global maximum** density.
@@ -58,6 +63,23 @@ Estimates based on a full run of the US dataset, accounting for **data sparsity*
 | 14 | 11,628,549 | 9.5 m | ~1.3% | ~56 GB | ~10 days | ~2.5 hours |
 
 > **Note**: "Probable Size" accounts for empty tiles being skipped. "Dense Size" (worst case) would be significantly higher (e.g., ~4.3 TB for Z14).
+
+### 6. Trajectorization Benchmarking & Optimizations
+We evaluated four strategies for re-partitioning vessel data for out-of-core Dask-based voyage segmentation (trajectorization) on Snellius:
+- **Strategy 1 (Direct Groupby-Apply)**: Groups partition data by MMSI directly. High memory usage and slow due to un-coordinated shuffling.
+- **Strategy 2 (Shuffle + Map)**: Shuffles rows using Dask's default index shuffle. Good performance (~145s) but high memory pressure (~6.8 GB).
+- **Strategy 3 (Set Index + Map)**: Set MMSI as index and partition. Raw speed champion (~140s) but memory intensive (~6.8 GB).
+- **Strategy 4 (SpatioTemporal Hilbert)**: Partitions space-time $(x, y, t)$ using a 3D Hilbert Curve with spatial-temporal halos. Uses **32% less memory** (~4.6 GB vs ~6.8 GB) with competitive runtimes (~202s).
+
+**Optimizations implemented for Strategy 4:**
+- **PyProj Vectorization**: Coordinate transformation center is calculated once per partition.
+- **Parquet Metadata Bounds**: Bypasses the slow `dask.compute` bounds calculation pass by reading file footer stats using PyArrow in under 10ms.
+- **1% Division Sampling**: Estimates partitioning boundaries on a 1% sample of the data to avoid exact quantile scanning.
+- **Zero-Copy Views**: Re-interprets `datetime64` pandas Series as raw integer views (`.values.view('int64') // 10**9`) to avoid type-casting overhead.
+
+Because of its high memory efficiency and scalability when processing multi-year high-resolution datasets, **Strategy 4 (SpatioTemporal Hilbert Curve)** is the default partitioning method.
+
+![Spatio-Temporal Hilbert spaces projection of US Coastline](images/us_hilbert_spaces.png)
 
 ## File Formats & Data Schemas
 
