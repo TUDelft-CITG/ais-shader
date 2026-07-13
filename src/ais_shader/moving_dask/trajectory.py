@@ -348,6 +348,10 @@ def process_single_vessel_partition(
             continue
         processed_vessels.append(process_single_vessel(sub_df.copy()))
         
+    is_gdf = isinstance(df, gpd.GeoDataFrame)
+    geom_col = df.geometry.name if is_gdf else None
+    crs = df.crs if is_gdf else None
+
     if processed_vessels:
         result = pd.concat(processed_vessels)
         result = result.drop(columns=['_x_proj', '_y_proj'])
@@ -356,6 +360,8 @@ def process_single_vessel_partition(
         else:
             cols = [c for c in result.columns if c != '_is_halo'] + ['_is_halo']
             result = result[cols]
+        if is_gdf:
+            result = gpd.GeoDataFrame(result, geometry=geom_col, crs=crs)
         return result
         
     empty_df = pd.DataFrame(columns=df.columns)
@@ -365,6 +371,8 @@ def process_single_vessel_partition(
     else:
         cols = [c for c in empty_df.columns if c != '_is_halo'] + ['_is_halo']
         empty_df = empty_df[cols]
+    if is_gdf:
+        empty_df = gpd.GeoDataFrame(empty_df, geometry=geom_col, crs=crs)
     return empty_df
 
 def trajectorize_dataframe(
