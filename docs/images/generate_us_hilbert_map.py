@@ -11,7 +11,7 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[2] / 'src'))
 from ais_shader.moving_dask.trajectory import encode_3d_hilbert_numpy
 
-def generate_map(df, x_int, y_int, t_int, p, filename, title):
+def generate_map(df, x_int, y_int, t_int, p, filename, title, seed):
     coords = np.column_stack((x_int, y_int, t_int))
     df = df.copy()
     df['hilbert_index'] = encode_3d_hilbert_numpy(coords, p)
@@ -31,6 +31,10 @@ def generate_map(df, x_int, y_int, t_int, p, filename, title):
     fig, ax = plt.subplots(figsize=(14, 8), dpi=150)
     fig.patch.set_facecolor('#0f172a')  # Slate-900 background
     ax.set_facecolor('#0f172a')
+    
+    # Generate distinct random colors using a fixed seed
+    rng = np.random.default_rng(seed=seed)
+    random_colors = {part_id: rng.random(3) for part_id in range(n_partitions)}
     
     # Group partitions by their spatial centroids (mean longitude) to color them spatially
     part_lons = []
@@ -55,15 +59,14 @@ def generate_map(df, x_int, y_int, t_int, p, filename, title):
         if part_df.empty:
             continue
             
-        # Determine spatial group and color palette
+        color = random_colors[part_id]
+        
+        # Determine spatial group label for legend
         if rank < band_size:
-            color = plt.get_cmap('cool')(rank / band_size * 0.4)
             group_label = "West Coast / Pacific (Band 1)"
         elif rank < 2 * band_size:
-            color = plt.get_cmap('plasma')(0.3 + (rank - band_size) / band_size * 0.4)
             group_label = "Central / Gulf Coast (Band 2)"
         else:
-            color = plt.get_cmap('spring')((rank - 2*band_size) / max(1, n_valid - 2*band_size) * 0.5 + 0.3)
             group_label = "East Coast / Atlantic (Band 3)"
             
         # Plot points of this partition (small dots)
@@ -157,7 +160,7 @@ def main():
     t_max_epoch = t_max.timestamp()
     
     # 3. Compute 3D Hilbert Coordinates & Index
-    p = 16  # Order 16 matches the main application's spatial granularity
+    p = 7  # Low spatial resolution order (p=7) to allow chronological/temporal splitting in dense port areas
     grid_size = (1 << p) - 1
     
     xs = df['longitude'].values
@@ -181,7 +184,8 @@ def main():
         t_int=t_int,
         p=p,
         filename='us_hilbert_spaces.png',
-        title='3D Spatio-Temporal Partitioning over US Coastline (Convex Hull Partition Hulls + Time Annotations)'
+        title='3D Spatio-Temporal Partitioning over US Coastline (p=7 Coarse Spatial Grid, Random Colors)',
+        seed=42
     )
     
     # Generate Map 2: Spatial-Only Partitioning (time=0)
@@ -193,7 +197,8 @@ def main():
         t_int=np.zeros_like(x_int),
         p=p,
         filename='us_hilbert_spaces_spatial_only.png',
-        title='2D Spatial-Only Hilbert Partitioning over US Coastline (Convex Hull Partition Hulls + Time Annotations)'
+        title='2D Spatial-Only Hilbert Partitioning over US Coastline (p=7 Coarse Spatial Grid, Random Colors)',
+        seed=101
     )
     
     print("Map generation complete!")
