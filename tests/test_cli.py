@@ -6,10 +6,22 @@ def test_cli_help():
     result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
     assert "trajectory" in result.output
+    assert "convert" in result.output
     # Check that old root level commands are gone
     assert "trajectorize" not in result.output
     assert "generate-lines" not in result.output
     assert "generate-segments" not in result.output
+    assert "convert-csv" not in result.output
+    assert "convert-wkb" not in result.output
+    assert "convert-ndjson" not in result.output
+
+def test_convert_help():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["convert", "--help"])
+    assert result.exit_code == 0
+    assert "csv" in result.output
+    assert "wkb" in result.output
+    assert "ndjson" in result.output
 
 def test_trajectory_help():
     runner = CliRunner()

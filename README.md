@@ -96,17 +96,17 @@ Convert the raw AIS data (WKB Parquet or GPKG) into a spatially partitioned GeoP
 
 **From Parquet:**
 ```bash
-uv run preprocess.py --input-file /path/to/raw.parquet --output-file /path/to/processed.parquet
+uv run preprocess.py --input-file /path/to/raw.geoparquet --output-file /path/to/processed.geoparquet
 ```
 
 **From GPKG:**
 ```bash
-uv run preprocess.py --input-file /path/to/data.gpkg --output-file /path/to/processed.parquet
+uv run preprocess.py --input-file /path/to/data.gpkg --output-file /path/to/processed.geoparquet
 ```
 *Note: GPKG conversion via Python can be slow. For faster results, use `ogr2ogr` first:*
 ```bash
-ogr2ogr -f Parquet -t_srs EPSG:3857 raw.parquet input.gpkg
-uv run preprocess.py --input-file raw.parquet --output-file processed.parquet
+ogr2ogr -f Parquet -t_srs EPSG:3857 raw.geoparquet input.gpkg
+uv run preprocess.py --input-file raw.geoparquet --output-file processed.geoparquet
 ```
 
 ### 1.5. Trajectory Processing (Voyage Segmentation & Feature Engineering)
@@ -117,9 +117,9 @@ All trajectory operations are consolidated under the `trajectory` command group:
 Segment raw AIS points into trips, detect vessel stops, and compute kinematic features (speed, acceleration, turn rate) on a Dask cluster using spatial or spatiotemporal partitioning:
 
 ```bash
-uv run ais-shader trajectory segment \
-    --input-file /path/to/processed.parquet \
-    --output-file /path/to/trajectorized.parquet \
+uv run ais-shader trajectory compute \
+    --input-file /path/to/processed.geoparquet \
+    --output-file /path/to/trajectorized.geoparquet \
     --partition-method spatiotemporal \
     --hilbert-p 16 \
     --n-partitions 128
@@ -131,16 +131,24 @@ Key Options:
 - `--n-partitions`: Number of target partitions (default: `128`).
 - `--gap-threshold-hours`: Trip segmentation threshold in hours (default: `1.0`).
 - `--input-crs`: Coordinate reference system of coordinates (default: `EPSG:4326`).
-- `--with-epochs`: (Optional) Generate epoch-normalized points, real-time segments, and epoch-normalized segments.
-- `--epochs-dir`: (Optional) Directory to save the epoch-normalized and segment datasets (defaults to output-file parent).
+- `--epoch-time`: (Optional) Represent timestamps as epoch-relative times (projected to `1970-01-01`).
 
 #### Aggregate Points to Lines
-Aggregate point pings from trajectorized parquet into LineString/MultiLineString trajectories matching the Marine Cadastre schema:
+Aggregate point pings from trajectorized points into LineString/MultiLineString trajectories matching the Marine Cadastre schema:
 
 ```bash
-uv run ais-shader trajectory lines \
-    --input-file /path/to/trajectorized.parquet \
+uv run ais-shader trajectory to-linestring \
+    --input-file /path/to/trajectorized.geoparquet \
     --output-file /path/to/trajectorized_lines.geoparquet
+```
+
+#### Generate Point-Pair Segments
+Generate 2-point segment LineStrings connecting consecutive point pairs:
+
+```bash
+uv run ais-shader trajectory to-segment \
+    --input-file /path/to/trajectorized.geoparquet \
+    --output-file /path/to/trajectorized_segments.geoparquet
 ```
 
 ### 2. Configuration
@@ -149,7 +157,7 @@ Edit `config.toml` to customize the visualization:
 
 ```toml
 [data]
-input_file = "/path/to/processed.parquet"
+input_file = "/path/to/processed.geoparquet"
 
 [visualization]
 zoom = 5

@@ -119,7 +119,15 @@ def preprocess(input_file, output_file, partitions, scheduler):
     """
     run_preprocessing(input_file, output_file, partitions, scheduler)
 
-@cli.command()
+@click.group(name="convert")
+def convert():
+    """
+    Consolidated commands for converting different raw data formats to standard flat GeoParquet.
+    """
+    pass
+
+
+@convert.command(name="wkb")
 @click.option(
     "--input-file",
     type=click.Path(exists=True, path_type=Path),
@@ -151,7 +159,7 @@ def convert_wkb(input_file, output_file, partitions, scheduler):
     run_wkb_conversion(input_file, output_file, partitions, scheduler)
 
 
-@cli.command()
+@convert.command(name="ndjson")
 @click.option(
     "--input-file",
     type=click.Path(exists=True, path_type=Path),
@@ -177,7 +185,7 @@ def convert_ndjson(input_file, output_file, scheduler):
     run_ndjson_conversion(input_file, output_file, scheduler)
 
 
-@cli.command()
+@convert.command(name="csv")
 @click.option(
     "--input-file",
     type=click.Path(exists=True, path_type=Path),
@@ -445,6 +453,8 @@ def to_segment(input_file, output_file, epoch_time):
 
 # Register trajectory commands
 cli.add_command(trajectory)
+# Register convert commands
+cli.add_command(convert)
 
 
 if __name__ == "__main__":
