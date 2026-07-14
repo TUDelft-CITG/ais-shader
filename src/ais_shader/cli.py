@@ -7,7 +7,7 @@ import tomllib
 # Import from src modules
 from .renderer import run_rendering
 from .postprocessing import run_post_processing
-from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_linestring_generation, run_epoch_and_segment_generation
+from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_csv_conversion, run_linestring_generation, run_segment_generation
 from .analysis import run_passage_analysis
 
 # Configure logging
@@ -179,6 +179,32 @@ def convert_ndjson(input_file, output_file, scheduler):
 
 @cli.command()
 @click.option(
+    "--input-file",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to input CSV (or zipped CSV) file.",
+)
+@click.option(
+    "--output-file",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Path to output GeoParquet file.",
+)
+@click.option(
+    "--scheduler",
+    type=str,
+    default=None,
+    help="Address of the Dask scheduler. If None, starts a local cluster.",
+)
+def convert_csv(input_file, output_file, scheduler):
+    """
+    Convert a CSV (or zipped CSV) file to a standard flat GeoParquet file.
+    """
+    run_csv_conversion(input_file, output_file, scheduler)
+
+
+@cli.command()
+@click.option(
     "--passage-file",
     type=click.Path(exists=True, path_type=Path),
     required=True,
@@ -215,7 +241,16 @@ def analyze_passage(passage_file, ais_dir, output_file, max_time_gap, scheduler)
     run_passage_analysis(passage_file, ais_dir, output_file, max_time_gap, scheduler)
 
 
-@cli.command()
+@click.group(name="trajectory")
+def trajectory():
+    """
+    Consolidated commands for AIS trajectory creation, segmentation, and feature engineering.
+    """
+    pass
+
+
+
+@trajectory.command(name="compute")
 @click.option(
     "--input-file",
     type=click.Path(exists=True, path_type=Path),
@@ -294,13 +329,19 @@ def analyze_passage(passage_file, ais_dir, output_file, max_time_gap, scheduler)
     default=16,
     help="Hilbert curve resolution order.",
 )
-def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions, input_crs, gap_threshold_hours, partition_method, hilbert_p):
+@click.option(
+    "--epoch-time",
+    is_flag=True,
+    default=False,
+    help="Represent timestamps as epoch-relative times (projected to 1970-01-01).",
+)
+def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions, input_crs, gap_threshold_hours, partition_method, hilbert_p, epoch_time):
     """
     Voyage segmentation and feature engineering on Dask.
     """
     import dask_geopandas
     from dask.distributed import Client
-    import dask.dataframe as dd
+    import pandas as pd
     from .moving_dask.trajectory import trajectorize_dataframe
     
     if scheduler:
@@ -328,17 +369,29 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
             dataset_path=input_file
         )
 
+        if epoch_time:
+            logger.info("Normalizing timestamps to epoch-relative (start at 1970-01-01)...")
+            def normalize_to_epoch(df):
+                if len(df) == 0:
+                    return df
+                if 'trip_id' in df.columns:
+                    start_times = df.groupby('trip_id')['base_date_time'].transform('min')
+                    offsets = df['base_date_time'] - start_times
+                    tz = df['base_date_time'].dt.tz
+                    epoch_base = pd.Timestamp('1970-01-01 00:00:00', tz=tz)
+                    df['base_date_time'] = epoch_base + offsets
+                return df
+            res_ddf = res_ddf.map_partitions(normalize_to_epoch, meta=res_ddf._meta)
+
         logger.info(f"Saving trajectorized dataset to {output_file}...")
-        res_ddf.to_geoparquet(output_file, overwrite=True)
+        res_ddf = res_ddf.reset_index(drop=True)
+        res_ddf.to_parquet(output_file)
         logger.info("Trajectorization complete!")
     finally:
         client.close()
 
 
-
-
-
-@cli.command()
+@trajectory.command(name="to-linestring")
 @click.option(
     "--input-file",
     type=click.Path(exists=True, path_type=Path),
@@ -357,14 +410,14 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
     default=None,
     help="Path to JSON mapping file for vessel type classification.",
 )
-def generate_lines(input_file, output_file, vessel_codes_json):
+def to_linestring(input_file, output_file, vessel_codes_json):
     """
     Aggregate points to LineString/MultiLineString trajectories matching Marine Cadastre schema.
     """
     run_linestring_generation(input_file, output_file, vessel_codes_json)
 
 
-@cli.command()
+@trajectory.command(name="to-segment")
 @click.option(
     "--input-file",
     type=click.Path(exists=True, path_type=Path),
@@ -372,16 +425,30 @@ def generate_lines(input_file, output_file, vessel_codes_json):
     help="Path to trajectorized point parquet file.",
 )
 @click.option(
-    "--output-dir",
+    "--output-file",
     type=click.Path(path_type=Path),
     required=True,
-    help="Directory to save the epoch-normalized and segment GeoParquet datasets.",
+    help="Path to output segments GeoParquet file.",
 )
-def generate_epochs(input_file, output_dir):
+@click.option(
+    "--epoch-time",
+    is_flag=True,
+    default=False,
+    help="Represent segment start/end timestamps as epoch-relative times.",
+)
+def to_segment(input_file, output_file, epoch_time):
     """
-    Generate epoch-normalized point trajectories and point-pair line segments.
+    Generate point-pair line segments from trajectorized point trajectories.
     """
-    run_epoch_and_segment_generation(input_file, output_dir)
+    run_segment_generation(input_file, output_file, epoch_time)
+
+
+# Register trajectory commands
+cli.add_command(trajectory)
+# Expose subcommands at the root level under their old names for backward compatibility:
+cli.add_command(compute, name="trajectorize")
+cli.add_command(to_linestring, name="generate-lines")
+cli.add_command(to_segment, name="generate-segments")
 
 
 if __name__ == "__main__":

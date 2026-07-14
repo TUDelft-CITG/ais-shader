@@ -37,7 +37,7 @@ sleep 10
 
 # 3. Run the trajectorize script connecting to the SLURM Dask Scheduler
 echo "Launching trajectorize workflow..."
-uv run ais-shader trajectorize \
+uv run ais-shader trajectory compute \
     --scheduler ${SCHEDULER_URL} \
     --input-file /projects/prjs2131/data/marine-cadastre/ais_2025_12 \
     --output-file /projects/prjs2131/data/marine-cadastre/ais_2025_12_trajectories.parquet \

@@ -109,12 +109,15 @@ ogr2ogr -f Parquet -t_srs EPSG:3857 raw.parquet input.gpkg
 uv run preprocess.py --input-file raw.parquet --output-file processed.parquet
 ```
 
-### 1.5. Trajectorize (Voyage Segmentation & Feature Engineering)
+### 1.5. Trajectory Processing (Voyage Segmentation & Feature Engineering)
 
+All trajectory operations are consolidated under the `trajectory` command group:
+
+#### Voyage Segmentation
 Segment raw AIS points into trips, detect vessel stops, and compute kinematic features (speed, acceleration, turn rate) on a Dask cluster using spatial or spatiotemporal partitioning:
 
 ```bash
-uv run ais-shader trajectorize \
+uv run ais-shader trajectory segment \
     --input-file /path/to/processed.parquet \
     --output-file /path/to/trajectorized.parquet \
     --partition-method spatiotemporal \
@@ -128,6 +131,17 @@ Key Options:
 - `--n-partitions`: Number of target partitions (default: `128`).
 - `--gap-threshold-hours`: Trip segmentation threshold in hours (default: `1.0`).
 - `--input-crs`: Coordinate reference system of coordinates (default: `EPSG:4326`).
+- `--with-epochs`: (Optional) Generate epoch-normalized points, real-time segments, and epoch-normalized segments.
+- `--epochs-dir`: (Optional) Directory to save the epoch-normalized and segment datasets (defaults to output-file parent).
+
+#### Aggregate Points to Lines
+Aggregate point pings from trajectorized parquet into LineString/MultiLineString trajectories matching the Marine Cadastre schema:
+
+```bash
+uv run ais-shader trajectory lines \
+    --input-file /path/to/trajectorized.parquet \
+    --output-file /path/to/trajectorized_lines.geoparquet
+```
 
 ### 2. Configuration
 
