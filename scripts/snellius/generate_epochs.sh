@@ -10,9 +10,14 @@ module load 2025 CGAL/6.0.1-GCCcore-14.2.0 Boost/1.88.0-GCC-14.2.0 GMP/6.3.0-GCC
 USER_NAME=${USER:-fbaart}
 DATA_DIR="/scratch-shared/${USER_NAME}/data/rws"
 
-echo "==> Running epoch and segment generation..."
-uv run ais-shader generate-epochs \
-    --input-file "$DATA_DIR/trajectorized.parquet" \
-    --output-dir "$DATA_DIR"
+# Generate epoch-normalized points
+uv run ais-shader trajectory compute "$DATA_DIR/processed.parquet" \
+    -o "$DATA_DIR/trajectorized_epochs.geoparquet" \
+    --epoch-time
+
+# Generate epoch-normalized segment-pairs
+uv run ais-shader trajectory to-segment "$DATA_DIR/trajectorized_epochs.geoparquet" \
+    -o "$DATA_DIR/trajectorized_segments_epochs.geoparquet" \
+    --epoch-time
 
 echo "==> Epoch and segment generation complete!"

@@ -7,7 +7,7 @@ import tomllib
 # Import from src modules
 from .renderer import run_rendering
 from .postprocessing import run_post_processing
-from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_linestring_generation, run_epoch_and_segment_generation
+from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_csv_conversion, run_linestring_generation, run_segment_generation, normalize_to_epoch
 from .analysis import run_passage_analysis
 
 # Configure logging
@@ -17,6 +17,22 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
+
+def _default_output_path(input_path: Path, suffix: str) -> Path:
+    stem = input_path.name
+    # Strip common suffixes sequentially (e.g., .csv.zip -> .csv -> base) using pathlib
+    while True:
+        ext = Path(stem).suffix
+        if ext.lower() in {".zip", ".csv", ".ndjson", ".parquet", ".geoparquet"}:
+            stem = stem[:-len(ext)]
+        else:
+            break
+    # Strip trailing trajectory processing suffixes to avoid accumulation
+    for s in ["-trajectorized", "-lines", "-segments"]:
+        if stem.endswith(s):
+            stem = stem[:-len(s)]
+    return input_path.with_name(f"{stem}{suffix}")
+
 
 @click.group()
 def cli():
@@ -119,18 +135,25 @@ def preprocess(input_file, output_file, partitions, scheduler):
     """
     run_preprocessing(input_file, output_file, partitions, scheduler)
 
-@cli.command()
-@click.option(
-    "--input-file",
+@click.group(name="convert")
+def convert():
+    """
+    Consolidated commands for converting different raw data formats to standard flat GeoParquet.
+    """
+    pass
+
+
+@convert.command(name="wkb")
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to input WKB Parquet file.",
 )
 @click.option(
     "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Path to output GeoParquet file.",
+    default=None,
+    help="Path to output GeoParquet file. Defaults to input file name with .geoparquet extension.",
 )
 @click.option(
     "--partitions",
@@ -146,23 +169,23 @@ def preprocess(input_file, output_file, partitions, scheduler):
 )
 def convert_wkb(input_file, output_file, partitions, scheduler):
     """
-    Convert a WKB-based Parquet file to a standard GeoParquet file.
+    Convert a WKB-based Parquet file (e.g. from marinecadastre.gov) to a standard GeoParquet file.
     """
+    output_file = output_file or _default_output_path(input_file, ".geoparquet")
     run_wkb_conversion(input_file, output_file, partitions, scheduler)
 
 
-@cli.command()
-@click.option(
-    "--input-file",
+@convert.command(name="ndjson")
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to input NDJSON file.",
 )
 @click.option(
     "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Path to output GeoParquet file.",
+    default=None,
+    help="Path to output GeoParquet file. Defaults to input file name with .geoparquet extension.",
 )
 @click.option(
     "--scheduler",
@@ -172,9 +195,36 @@ def convert_wkb(input_file, output_file, partitions, scheduler):
 )
 def convert_ndjson(input_file, output_file, scheduler):
     """
-    Convert an NDJSON file to a standard flat GeoParquet file using Dask Bag.
+    Convert an NDJSON file (e.g. from Rijkswaterstaat) to a standard flat GeoParquet file using Dask Bag.
     """
+    output_file = output_file or _default_output_path(input_file, ".geoparquet")
     run_ndjson_conversion(input_file, output_file, scheduler)
+
+
+@convert.command(name="csv")
+@click.argument(
+    "input-file",
+    type=click.Path(exists=True, path_type=Path),
+)
+@click.option(
+    "--output-file",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to output GeoParquet file. Defaults to input file name with .geoparquet extension.",
+)
+@click.option(
+    "--scheduler",
+    type=str,
+    default=None,
+    help="Address of the Dask scheduler. If None, starts a local cluster.",
+)
+def convert_csv(input_file, output_file, scheduler):
+    """
+    Convert a CSV (or zipped CSV) file (e.g. from aisdata.ais.dk) to a standard flat GeoParquet file.
+    """
+    output_file = output_file or _default_output_path(input_file, ".geoparquet")
+    run_csv_conversion(input_file, output_file, scheduler)
 
 
 @cli.command()
@@ -215,18 +265,26 @@ def analyze_passage(passage_file, ais_dir, output_file, max_time_gap, scheduler)
     run_passage_analysis(passage_file, ais_dir, output_file, max_time_gap, scheduler)
 
 
-@cli.command()
-@click.option(
-    "--input-file",
+@click.group(name="trajectory")
+def trajectory():
+    """
+    Consolidated commands for AIS trajectory creation, segmentation, and feature engineering.
+    """
+    pass
+
+
+
+@trajectory.command(name="compute")
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to input raw AIS Parquet directory/file.",
 )
 @click.option(
     "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Path to output trajectorized Parquet directory.",
+    default=None,
+    help="Path to output trajectorized Parquet directory. Defaults to input file name with -trajectorized.geoparquet extension.",
 )
 @click.option(
     "--vessel-id-col",
@@ -294,13 +352,20 @@ def analyze_passage(passage_file, ais_dir, output_file, max_time_gap, scheduler)
     default=16,
     help="Hilbert curve resolution order.",
 )
-def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions, input_crs, gap_threshold_hours, partition_method, hilbert_p):
+@click.option(
+    "--epoch-time",
+    is_flag=True,
+    default=False,
+    help="Represent timestamps as epoch-relative times (projected to 1970-01-01).",
+)
+def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions, input_crs, gap_threshold_hours, partition_method, hilbert_p, epoch_time):
     """
     Voyage segmentation and feature engineering on Dask.
     """
+    output_file = output_file or _default_output_path(input_file, "-trajectorized.geoparquet")
     import dask_geopandas
     from dask.distributed import Client
-    import dask.dataframe as dd
+    import pandas as pd
     from .moving_dask.trajectory import trajectorize_dataframe
     
     if scheduler:
@@ -311,6 +376,9 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
     try:
         logger.info(f"Reading input from {input_file}...")
         ddf = dask_geopandas.read_parquet(input_file)
+
+        # Drop empty coordinates immediately so they don't distort spatial partitioning/Hilbert divisions
+        ddf = ddf.dropna(subset=[x_col, y_col])
 
         # Run pipeline
         res_ddf = trajectorize_dataframe(
@@ -328,28 +396,29 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
             dataset_path=input_file
         )
 
+        if epoch_time:
+            logger.info("Normalizing timestamps to epoch-relative (start at 1970-01-01)...")
+            res_ddf = res_ddf.map_partitions(normalize_to_epoch, time_col=time_col, meta=res_ddf._meta)
+
         logger.info(f"Saving trajectorized dataset to {output_file}...")
-        res_ddf.to_geoparquet(output_file, overwrite=True)
+        res_ddf = res_ddf.reset_index(drop=True)
+        res_ddf.to_parquet(output_file, overwrite=True)
         logger.info("Trajectorization complete!")
     finally:
         client.close()
 
 
-
-
-
-@cli.command()
-@click.option(
-    "--input-file",
+@trajectory.command(name="to-linestring")
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to trajectorized point parquet file.",
 )
 @click.option(
     "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Path to output GeoParquet file.",
+    default=None,
+    help="Path to output GeoParquet file. Defaults to input file name with -lines.geoparquet extension.",
 )
 @click.option(
     "--vessel-codes-json",
@@ -357,31 +426,44 @@ def trajectorize(input_file, output_file, vessel_id_col, time_col, x_col, y_col,
     default=None,
     help="Path to JSON mapping file for vessel type classification.",
 )
-def generate_lines(input_file, output_file, vessel_codes_json):
+def to_linestring(input_file, output_file, vessel_codes_json):
     """
     Aggregate points to LineString/MultiLineString trajectories matching Marine Cadastre schema.
     """
+    output_file = output_file or _default_output_path(input_file, "-lines.geoparquet")
     run_linestring_generation(input_file, output_file, vessel_codes_json)
 
 
-@cli.command()
-@click.option(
-    "--input-file",
+@trajectory.command(name="to-segment")
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to trajectorized point parquet file.",
 )
 @click.option(
-    "--output-dir",
+    "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Directory to save the epoch-normalized and segment GeoParquet datasets.",
+    default=None,
+    help="Path to output segments GeoParquet file. Defaults to input file name with -segments.geoparquet extension.",
 )
-def generate_epochs(input_file, output_dir):
+@click.option(
+    "--epoch-time",
+    is_flag=True,
+    default=False,
+    help="Represent segment start/end timestamps as epoch-relative times.",
+)
+def to_segment(input_file, output_file, epoch_time):
     """
-    Generate epoch-normalized point trajectories and point-pair line segments.
+    Generate point-pair line segments from trajectorized point trajectories.
     """
-    run_epoch_and_segment_generation(input_file, output_dir)
+    output_file = output_file or _default_output_path(input_file, "-segments.geoparquet")
+    run_segment_generation(input_file, output_file, epoch_time)
+
+
+# Register trajectory commands
+cli.add_command(trajectory)
+# Register convert commands
+cli.add_command(convert)
 
 
 if __name__ == "__main__":

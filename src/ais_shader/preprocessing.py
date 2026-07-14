@@ -17,6 +17,19 @@ def convert_to_gdf(df: pd.DataFrame) -> gpd.GeoDataFrame:
     gdf = gpd.GeoDataFrame(df_copy, geometry=gs, crs="EPSG:4269")
     return gdf
 
+def normalize_to_epoch(df: pd.DataFrame, time_col: str = 'base_date_time') -> pd.DataFrame:
+    """Normalizes timestamps in a vessel trajectory dataframe to be epoch-relative (starting at 1970-01-01)."""
+    if len(df) == 0:
+        return df
+    if 'trip_id' in df.columns:
+        start_times = df.groupby('trip_id')[time_col].transform('min')
+        offsets = df[time_col] - start_times
+        tz = df[time_col].dt.tz
+        epoch_base = pd.Timestamp('1970-01-01 00:00:00', tz=tz)
+        df[time_col] = epoch_base + offsets
+    return df
+
+
 def run_preprocessing(input_file: Path, output_file: Path, partitions: int, scheduler: str):
     """
     Preprocess AIS data: GeoParquet/GPKG -> Reproject -> Spatial Partition -> Save.
@@ -206,6 +219,13 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
         logger.info("Converting DataFrame to GeoDataFrame with Point geometry...")
         def make_points(df):
             df['base_date_time'] = pd.to_datetime(df['base_date_time'], utc=True).dt.tz_localize(None)
+            
+            # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
+            # This generates POINT EMPTY geometries without discarding any raw rows
+            import numpy as np
+            df.loc[df['latitude'] == 91.0, 'latitude'] = np.nan
+            df.loc[df['longitude'] == 181.0, 'longitude'] = np.nan
+            
             geometry = gpd.points_from_xy(df['longitude'], df['latitude'])
             return gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
             
@@ -224,6 +244,110 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
         logger.info(f"Saving GeoParquet to {output_file}...")
         ddf_geo.to_parquet(output_file)
         logger.info("NDJSON conversion complete!")
+        
+    finally:
+        client.close()
+
+
+def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
+    """
+    Convert CSV AIS data (standard or zipped) to standard flat GeoParquet.
+    """
+    if scheduler:
+        logger.info(f"Connecting to Dask scheduler at {scheduler}...")
+        client = Client(scheduler)
+    else:
+        logger.info("Starting Local Dask Client...")
+        client = Client()
+        
+    try:
+        logger.info(f"Reading CSV from {input_file} using Dask DataFrame...")
+        # Note: # Timestamp has a leading hash sign in standard Danish AIS CSV files.
+        # See specification at: http://aisdata.ais.dk/!_README_information_CSV_files.txt
+        needed_src_cols = [
+            '# Timestamp', 'MMSI', 'Latitude', 'Longitude', 'SOG', 'COG', 
+            'Heading', 'Width', 'Length', 'Draught', 'Navigational status', 'Ship type'
+        ]
+        df = dd.read_csv(
+            input_file,
+            compression="zip" if input_file.suffix == ".zip" else None,
+            blocksize=None if input_file.suffix == ".zip" else "64MB",
+            usecols=needed_src_cols,
+            dtype={
+                '# Timestamp': 'object',
+                'MMSI': 'int64',
+                'Latitude': 'float64',
+                'Longitude': 'float64',
+                'SOG': 'float64',
+                'COG': 'float64',
+                'Heading': 'float64',
+                'Width': 'float64',
+                'Length': 'float64',
+                'Draught': 'float64',
+                'Navigational status': 'object',
+                'Ship type': 'object'
+            }
+        )
+        
+        df = df.rename(columns={
+            '# Timestamp': 'base_date_time',
+            'MMSI': 'mmsi',
+            'Latitude': 'latitude',
+            'Longitude': 'longitude',
+            'SOG': 'sog',
+            'COG': 'cog',
+            'Heading': 'heading',
+            'Width': 'beam',
+            'Length': 'length',
+            'Draught': 'draught',
+            'Navigational status': 'status',
+            'Ship type': 'shiptypeAIS'
+        })
+        
+        needed_cols = [
+            'mmsi', 'base_date_time', 'longitude', 'latitude', 'cog', 'sog', 
+            'heading', 'beam', 'length', 'draught', 'status', 'shiptypeAIS'
+        ]
+        df = df[needed_cols]
+        
+        logger.info("Converting DataFrame to GeoDataFrame with Point geometry...")
+        def make_points(df):
+            df['base_date_time'] = pd.to_datetime(df['base_date_time'], format="%d/%m/%Y %H:%M:%S", errors='coerce')
+            
+            # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
+            # This generates POINT EMPTY geometries without discarding any raw rows
+            import numpy as np
+            df.loc[df['latitude'] == 91.0, 'latitude'] = np.nan
+            df.loc[df['longitude'] == 181.0, 'longitude'] = np.nan
+            
+            geometry = gpd.points_from_xy(df['longitude'], df['latitude'])
+            return gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
+            
+        meta_df = pd.DataFrame(columns=needed_cols)
+        meta_df = meta_df.astype({
+            'mmsi': 'int64',
+            'base_date_time': 'datetime64[ns]',
+            'longitude': 'float64',
+            'latitude': 'float64',
+            'cog': 'float64',
+            'sog': 'float64',
+            'heading': 'float64',
+            'beam': 'float64',
+            'length': 'float64',
+            'draught': 'float64',
+            'status': 'object',
+            'shiptypeAIS': 'object'
+        })
+        meta_gdf = gpd.GeoDataFrame(meta_df, geometry=gpd.GeoSeries([], dtype="object"), crs="EPSG:4326")
+        
+        ddf_geo = df.map_partitions(make_points, meta=meta_gdf)
+        ddf_geo = dask_geopandas.from_dask_dataframe(ddf_geo, geometry="geometry")
+        
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"Saving GeoParquet to {output_file}...")
+        ddf_geo.to_parquet(output_file)
+        logger.info("CSV conversion complete!")
         
     finally:
         client.close()
@@ -354,9 +478,10 @@ def run_linestring_generation(input_file: Path, output_file: Path, vessel_codes_
     logger.info("Line generation complete!")
 
 
-def run_epoch_and_segment_generation(input_file: Path, output_dir: Path):
+def run_segment_generation(input_file: Path, output_file: Path, epoch_time: bool = False):
     """
-    Generate epoch-normalized points, real-time segment pairs, and epoch-normalized segment pairs.
+    Generate point-pair line segments from trajectorized point dataset,
+    with option to use epoch-normalized timestamps.
     """
     from shapely.geometry import LineString
     import shapely
@@ -368,23 +493,11 @@ def run_epoch_and_segment_generation(input_file: Path, output_dir: Path):
     logger.info("Sorting data chronologically per trip...")
     gdf = gdf.sort_values(by=['trip_id', 'base_date_time'])
     
-    logger.info("Calculating trip start times and epoch-normalized timestamps...")
-    start_times = gdf.groupby('trip_id')['base_date_time'].transform('min')
-    offsets = gdf['base_date_time'] - start_times
-    epoch_base = pd.Timestamp('1970-01-01 00:00:00', tz='UTC')
-    gdf['epoch_time'] = epoch_base + offsets
-    
-    # 1. Save epoch points
-    gdf_epoch_points = gdf.copy()
-    gdf_epoch_points['base_date_time'] = gdf_epoch_points['epoch_time']
-    gdf_epoch_points = gdf_epoch_points.drop(columns=['epoch_time']).sort_values(by='base_date_time')
-    
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_points_epoch = output_dir / 'trajectorized_epochs.geoparquet'
-    logger.info(f"Saving epoch-normalized points to GeoParquet: {output_points_epoch}...")
-    gdf_epoch_points.to_parquet(output_points_epoch)
-    
-    # 2. Decompose into 2-point Line Segments (Pairs)
+    if epoch_time:
+        logger.info("Calculating trip start times and epoch-normalized timestamps...")
+        gdf = normalize_to_epoch(gdf, 'base_date_time')
+        
+    # Decompose into 2-point Line Segments (Pairs)
     logger.info("Generating point-pair line segments...")
     shifted = gdf.groupby('trip_id').shift(-1)
     mask = shifted['base_date_time'].notna()
@@ -409,8 +522,6 @@ def run_epoch_and_segment_generation(input_file: Path, output_dir: Path):
         'Draft': p1['draught'].values,
         'segment_start_time': p1['base_date_time'].values,
         'segment_end_time': p2['base_date_time'].values,
-        'epoch_start_time': p1['epoch_time'].values,
-        'epoch_end_time': p2['epoch_time'].values,
         'speed_mps': p1['speed_mps'].values,
         'acceleration_mps2': p1['acceleration_mps2'].values,
     })
@@ -418,23 +529,8 @@ def run_epoch_and_segment_generation(input_file: Path, output_dir: Path):
     df_segments['segment_duration_s'] = (df_segments['segment_end_time'] - df_segments['segment_start_time']).dt.total_seconds()
     gdf_segments = gpd.GeoDataFrame(df_segments, geometry=geoms, crs="EPSG:4326")
     
-    # Save real-time segments
-    gdf_rt_segments = gdf_segments.drop(columns=['epoch_start_time', 'epoch_end_time']).sort_values(by='segment_start_time')
-    output_rt_segments = output_dir / 'trajectorized_segments.geoparquet'
-    logger.info(f"Saving real-time segments to GeoParquet: {output_rt_segments}...")
-    gdf_rt_segments.to_parquet(output_rt_segments)
-    
-    # Save epoch segments
-    gdf_ep_segments = gdf_segments.drop(columns=['segment_start_time', 'segment_end_time'])
-    gdf_ep_segments = gdf_ep_segments.rename(columns={
-        'epoch_start_time': 'segment_start_time',
-        'epoch_end_time': 'segment_end_time'
-    })
-    gdf_ep_segments = gdf_ep_segments.sort_values(by='segment_start_time')
-    
-    output_ep_segments = output_dir / 'trajectorized_segments_epochs.geoparquet'
-    logger.info(f"Saving epoch-normalized segments to GeoParquet: {output_ep_segments}...")
-    gdf_ep_segments.to_parquet(output_ep_segments)
-    
-    logger.info("Epoch and segment datasets generation complete!")
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Saving segments GeoParquet to: {output_file}...")
+    gdf_segments.to_parquet(output_file)
+    logger.info("Segment generation complete!")
 
