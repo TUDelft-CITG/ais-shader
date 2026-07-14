@@ -126,9 +126,17 @@ def add_hilbert_index(
     yd = y_max - y_min if y_max != y_min else 1.0
     td = t_max_epoch - t_min_epoch if t_max_epoch != t_min_epoch else 1.0
     
-    x_int = np.clip((xs - x_min) / xd * grid_size, 0, grid_size).astype(np.int64)
-    y_int = np.clip((ys - y_min) / yd * grid_size, 0, grid_size).astype(np.int64)
-    t_int = np.clip((ts - t_min_epoch) / td * grid_size, 0, grid_size).astype(np.int64)
+    # Mask NaN coordinates (empty geometries) to avoid RuntimeWarning during integer cast
+    valid_mask = ~np.isnan(xs) & ~np.isnan(ys)
+    
+    x_int = np.zeros_like(xs, dtype=np.int64)
+    y_int = np.zeros_like(ys, dtype=np.int64)
+    t_int = np.zeros_like(ts, dtype=np.int64)
+    
+    if np.any(valid_mask):
+        x_int[valid_mask] = np.clip((xs[valid_mask] - x_min) / xd * grid_size, 0, grid_size).astype(np.int64)
+        y_int[valid_mask] = np.clip((ys[valid_mask] - y_min) / yd * grid_size, 0, grid_size).astype(np.int64)
+        t_int[valid_mask] = np.clip((ts[valid_mask] - t_min_epoch) / td * grid_size, 0, grid_size).astype(np.int64)
     
     coords = np.column_stack((x_int, y_int, t_int))
     df['hilbert_index'] = encode_3d_hilbert_numpy(coords, p)
