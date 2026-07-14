@@ -6,9 +6,10 @@ def test_cli_help():
     result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
     assert "trajectory" in result.output
-    assert "trajectorize" in result.output
-    assert "generate-lines" in result.output
-    assert "generate-segments" in result.output
+    # Check that old root level commands are gone
+    assert "trajectorize" not in result.output
+    assert "generate-lines" not in result.output
+    assert "generate-segments" not in result.output
 
 def test_trajectory_help():
     runner = CliRunner()

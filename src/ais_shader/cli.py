@@ -445,10 +445,6 @@ def to_segment(input_file, output_file, epoch_time):
 
 # Register trajectory commands
 cli.add_command(trajectory)
-# Expose subcommands at the root level under their old names for backward compatibility:
-cli.add_command(compute, name="trajectorize")
-cli.add_command(to_linestring, name="generate-lines")
-cli.add_command(to_segment, name="generate-segments")
 
 
 if __name__ == "__main__":
