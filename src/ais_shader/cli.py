@@ -7,7 +7,7 @@ import tomllib
 # Import from src modules
 from .renderer import run_rendering
 from .postprocessing import run_post_processing
-from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_csv_conversion, run_linestring_generation, run_segment_generation
+from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_csv_conversion, run_linestring_generation, run_segment_generation, normalize_to_epoch
 from .analysis import run_passage_analysis
 
 # Configure logging
@@ -19,11 +19,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def _default_output_path(input_path: Path, suffix: str) -> Path:
+    import os
     stem = input_path.name
-    for s in ["-trajectorized.geoparquet", "-trajectorized.parquet", "-trajectorized", ".csv.zip", ".zip", ".csv", ".ndjson", ".geoparquet", ".parquet"]:
+    # Strip common suffixes sequentially (e.g., .csv.zip -> .csv -> base)
+    while True:
+        base, ext = os.path.splitext(stem)
+        if ext.lower() in {".zip", ".csv", ".ndjson", ".parquet", ".geoparquet"}:
+            stem = base
+        else:
+            break
+    # Strip trailing trajectory processing suffixes to avoid accumulation
+    for s in ["-trajectorized", "-lines", "-segments"]:
         if stem.endswith(s):
             stem = stem[:-len(s)]
-            break
     return input_path.with_name(f"{stem}{suffix}")
 
 
@@ -370,6 +378,9 @@ def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, sche
         logger.info(f"Reading input from {input_file}...")
         ddf = dask_geopandas.read_parquet(input_file)
 
+        # Drop empty coordinates immediately so they don't distort spatial partitioning/Hilbert divisions
+        ddf = ddf.dropna(subset=[x_col, y_col])
+
         # Run pipeline
         res_ddf = trajectorize_dataframe(
             ddf=ddf,
@@ -388,17 +399,7 @@ def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, sche
 
         if epoch_time:
             logger.info("Normalizing timestamps to epoch-relative (start at 1970-01-01)...")
-            def normalize_to_epoch(df):
-                if len(df) == 0:
-                    return df
-                if 'trip_id' in df.columns:
-                    start_times = df.groupby('trip_id')['base_date_time'].transform('min')
-                    offsets = df['base_date_time'] - start_times
-                    tz = df['base_date_time'].dt.tz
-                    epoch_base = pd.Timestamp('1970-01-01 00:00:00', tz=tz)
-                    df['base_date_time'] = epoch_base + offsets
-                return df
-            res_ddf = res_ddf.map_partitions(normalize_to_epoch, meta=res_ddf._meta)
+            res_ddf = res_ddf.map_partitions(normalize_to_epoch, time_col=time_col, meta=res_ddf._meta)
 
         logger.info(f"Saving trajectorized dataset to {output_file}...")
         res_ddf = res_ddf.reset_index(drop=True)

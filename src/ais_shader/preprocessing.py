@@ -17,6 +17,19 @@ def convert_to_gdf(df: pd.DataFrame) -> gpd.GeoDataFrame:
     gdf = gpd.GeoDataFrame(df_copy, geometry=gs, crs="EPSG:4269")
     return gdf
 
+def normalize_to_epoch(df: pd.DataFrame, time_col: str = 'base_date_time') -> pd.DataFrame:
+    """Normalizes timestamps in a vessel trajectory dataframe to be epoch-relative (starting at 1970-01-01)."""
+    if len(df) == 0:
+        return df
+    if 'trip_id' in df.columns:
+        start_times = df.groupby('trip_id')[time_col].transform('min')
+        offsets = df[time_col] - start_times
+        tz = df[time_col].dt.tz
+        epoch_base = pd.Timestamp('1970-01-01 00:00:00', tz=tz)
+        df[time_col] = epoch_base + offsets
+    return df
+
+
 def run_preprocessing(input_file: Path, output_file: Path, partitions: int, scheduler: str):
     """
     Preprocess AIS data: GeoParquet/GPKG -> Reproject -> Spatial Partition -> Save.
@@ -249,7 +262,8 @@ def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
         
     try:
         logger.info(f"Reading CSV from {input_file} using Dask DataFrame...")
-        # Note: # Timestamp has a leading hash sign in standard Danish AIS CSV files
+        # Note: # Timestamp has a leading hash sign in standard Danish AIS CSV files.
+        # See specification at: http://aisdata.ais.dk/!_README_information_CSV_files.txt
         needed_src_cols = [
             '# Timestamp', 'MMSI', 'Latitude', 'Longitude', 'SOG', 'COG', 
             'Heading', 'Width', 'Length', 'Draught', 'Navigational status', 'Ship type'
@@ -481,11 +495,7 @@ def run_segment_generation(input_file: Path, output_file: Path, epoch_time: bool
     
     if epoch_time:
         logger.info("Calculating trip start times and epoch-normalized timestamps...")
-        start_times = gdf.groupby('trip_id')['base_date_time'].transform('min')
-        offsets = gdf['base_date_time'] - start_times
-        tz = gdf['base_date_time'].dt.tz
-        epoch_base = pd.Timestamp('1970-01-01 00:00:00', tz=tz)
-        gdf['base_date_time'] = epoch_base + offsets
+        gdf = normalize_to_epoch(gdf, 'base_date_time')
         
     # Decompose into 2-point Line Segments (Pairs)
     logger.info("Generating point-pair line segments...")

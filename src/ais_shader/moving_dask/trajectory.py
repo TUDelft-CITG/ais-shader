@@ -126,17 +126,9 @@ def add_hilbert_index(
     yd = y_max - y_min if y_max != y_min else 1.0
     td = t_max_epoch - t_min_epoch if t_max_epoch != t_min_epoch else 1.0
     
-    # Mask NaN coordinates (empty geometries) to avoid RuntimeWarning during integer cast
-    valid_mask = ~np.isnan(xs) & ~np.isnan(ys)
-    
-    x_int = np.zeros_like(xs, dtype=np.int64)
-    y_int = np.zeros_like(ys, dtype=np.int64)
-    t_int = np.zeros_like(ts, dtype=np.int64)
-    
-    if np.any(valid_mask):
-        x_int[valid_mask] = np.clip((xs[valid_mask] - x_min) / xd * grid_size, 0, grid_size).astype(np.int64)
-        y_int[valid_mask] = np.clip((ys[valid_mask] - y_min) / yd * grid_size, 0, grid_size).astype(np.int64)
-        t_int[valid_mask] = np.clip((ts[valid_mask] - t_min_epoch) / td * grid_size, 0, grid_size).astype(np.int64)
+    x_int = np.clip((xs - x_min) / xd * grid_size, 0, grid_size).astype(np.int64)
+    y_int = np.clip((ys - y_min) / yd * grid_size, 0, grid_size).astype(np.int64)
+    t_int = np.clip((ts - t_min_epoch) / td * grid_size, 0, grid_size).astype(np.int64)
     
     coords = np.column_stack((x_int, y_int, t_int))
     df['hilbert_index'] = encode_3d_hilbert_numpy(coords, p)
@@ -282,9 +274,6 @@ def process_single_vessel_partition(
         # Center the projection on the mean of the partition coordinates
         lon0 = df[x_col].mean()
         lat0 = df[y_col].mean()
-        if np.isnan(lon0) or np.isnan(lat0):
-            lon0 = 0.0
-            lat0 = 0.0
         proj_str = f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
         transformer = Transformer.from_crs(crs_obj, proj_str, always_xy=True)
         x_proj, y_proj = transformer.transform(df[x_col].values, df[y_col].values)
