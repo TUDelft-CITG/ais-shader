@@ -206,6 +206,13 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
         logger.info("Converting DataFrame to GeoDataFrame with Point geometry...")
         def make_points(df):
             df['base_date_time'] = pd.to_datetime(df['base_date_time'], utc=True).dt.tz_localize(None)
+            
+            # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
+            # This generates POINT EMPTY geometries without discarding any raw rows
+            import numpy as np
+            df.loc[df['latitude'] == 91.0, 'latitude'] = np.nan
+            df.loc[df['longitude'] == 181.0, 'longitude'] = np.nan
+            
             geometry = gpd.points_from_xy(df['longitude'], df['latitude'])
             return gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
             
@@ -292,6 +299,13 @@ def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
         logger.info("Converting DataFrame to GeoDataFrame with Point geometry...")
         def make_points(df):
             df['base_date_time'] = pd.to_datetime(df['base_date_time'], format="%d/%m/%Y %H:%M:%S", errors='coerce')
+            
+            # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
+            # This generates POINT EMPTY geometries without discarding any raw rows
+            import numpy as np
+            df.loc[df['latitude'] == 91.0, 'latitude'] = np.nan
+            df.loc[df['longitude'] == 181.0, 'longitude'] = np.nan
+            
             geometry = gpd.points_from_xy(df['longitude'], df['latitude'])
             return gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
             
