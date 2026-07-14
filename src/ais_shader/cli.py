@@ -146,7 +146,7 @@ def preprocess(input_file, output_file, partitions, scheduler):
 )
 def convert_wkb(input_file, output_file, partitions, scheduler):
     """
-    Convert a WKB-based Parquet file to a standard GeoParquet file.
+    Convert a WKB-based Parquet file (e.g. from marinecadastre.gov) to a standard GeoParquet file.
     """
     run_wkb_conversion(input_file, output_file, partitions, scheduler)
 
@@ -172,7 +172,7 @@ def convert_wkb(input_file, output_file, partitions, scheduler):
 )
 def convert_ndjson(input_file, output_file, scheduler):
     """
-    Convert an NDJSON file to a standard flat GeoParquet file using Dask Bag.
+    Convert an NDJSON file (e.g. from Rijkswaterstaat) to a standard flat GeoParquet file using Dask Bag.
     """
     run_ndjson_conversion(input_file, output_file, scheduler)
 
@@ -198,7 +198,7 @@ def convert_ndjson(input_file, output_file, scheduler):
 )
 def convert_csv(input_file, output_file, scheduler):
     """
-    Convert a CSV (or zipped CSV) file to a standard flat GeoParquet file.
+    Convert a CSV (or zipped CSV) file (e.g. from aisdata.ais.dk) to a standard flat GeoParquet file.
     """
     run_csv_conversion(input_file, output_file, scheduler)
 
