@@ -279,6 +279,9 @@ def process_single_vessel_partition(
         # Center the projection on the mean of the partition coordinates
         lon0 = df[x_col].mean()
         lat0 = df[y_col].mean()
+        if np.isnan(lon0) or np.isnan(lat0):
+            lon0 = 0.0
+            lat0 = 0.0
         proj_str = f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
         transformer = Transformer.from_crs(crs_obj, proj_str, always_xy=True)
         x_proj, y_proj = transformer.transform(df[x_col].values, df[y_col].values)
