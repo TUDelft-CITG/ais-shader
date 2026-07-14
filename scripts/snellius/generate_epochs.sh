@@ -11,15 +11,13 @@ USER_NAME=${USER:-fbaart}
 DATA_DIR="/scratch-shared/${USER_NAME}/data/rws"
 
 # Generate epoch-normalized points
-uv run ais-shader trajectory compute \
-    --input-file "$DATA_DIR/processed.parquet" \
-    --output-file "$DATA_DIR/trajectorized_epochs.geoparquet" \
+uv run ais-shader trajectory compute "$DATA_DIR/processed.parquet" \
+    -o "$DATA_DIR/trajectorized_epochs.geoparquet" \
     --epoch-time
 
 # Generate epoch-normalized segment-pairs
-uv run ais-shader trajectory to-segment \
-    --input-file "$DATA_DIR/trajectorized_epochs.geoparquet" \
-    --output-file "$DATA_DIR/trajectorized_segments_epochs.geoparquet" \
+uv run ais-shader trajectory to-segment "$DATA_DIR/trajectorized_epochs.geoparquet" \
+    -o "$DATA_DIR/trajectorized_segments_epochs.geoparquet" \
     --epoch-time
 
 echo "==> Epoch and segment generation complete!"

@@ -117,15 +117,14 @@ All trajectory operations are consolidated under the `trajectory` command group:
 Segment raw AIS points into trips, detect vessel stops, and compute kinematic features (speed, acceleration, turn rate) on a Dask cluster using spatial or spatiotemporal partitioning:
 
 ```bash
-uv run ais-shader trajectory compute \
-    --input-file /path/to/processed.geoparquet \
-    --output-file /path/to/trajectorized.geoparquet \
+uv run ais-shader trajectory compute /path/to/processed.geoparquet \
     --partition-method spatiotemporal \
     --hilbert-p 16 \
     --n-partitions 128
 ```
 
 Key Options:
+- `-o, --output-file`: (Optional) Output trajectorized Parquet directory path (defaults to input file with `-trajectorized.geoparquet` suffix).
 - `--partition-method`: Partitioning strategy, either `vessel` (MMSI group) or `spatiotemporal` (3D space-time Hilbert curve partitioning + halo lookback, default).
 - `--hilbert-p`: Order of the 3D Hilbert Curve (default: `16`).
 - `--n-partitions`: Number of target partitions (default: `128`).
@@ -137,18 +136,16 @@ Key Options:
 Aggregate point pings from trajectorized points into LineString/MultiLineString trajectories matching the Marine Cadastre schema:
 
 ```bash
-uv run ais-shader trajectory to-linestring \
-    --input-file /path/to/trajectorized.geoparquet \
-    --output-file /path/to/trajectorized_lines.geoparquet
+# Automatically saves output to /path/to/trajectorized-lines.geoparquet
+uv run ais-shader trajectory to-linestring /path/to/trajectorized.geoparquet
 ```
 
 #### Generate Point-Pair Segments
 Generate 2-point segment LineStrings connecting consecutive point pairs:
 
 ```bash
-uv run ais-shader trajectory to-segment \
-    --input-file /path/to/trajectorized.geoparquet \
-    --output-file /path/to/trajectorized_segments.geoparquet
+# Automatically saves output to /path/to/trajectorized-segments.geoparquet
+uv run ais-shader trajectory to-segment /path/to/trajectorized.geoparquet
 ```
 
 ### 2. Configuration

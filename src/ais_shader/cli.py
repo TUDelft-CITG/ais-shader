@@ -18,6 +18,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def _default_output_path(input_path: Path, suffix: str) -> Path:
+    stem = input_path.name
+    for s in ["-trajectorized.geoparquet", "-trajectorized.parquet", "-trajectorized", ".csv.zip", ".zip", ".csv", ".ndjson", ".geoparquet", ".parquet"]:
+        if stem.endswith(s):
+            stem = stem[:-len(s)]
+            break
+    return input_path.with_name(f"{stem}{suffix}")
+
+
 @click.group()
 def cli():
     """
@@ -128,17 +137,16 @@ def convert():
 
 
 @convert.command(name="wkb")
-@click.option(
-    "--input-file",
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to input WKB Parquet file.",
 )
 @click.option(
     "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Path to output GeoParquet file.",
+    default=None,
+    help="Path to output GeoParquet file. Defaults to input file name with .geoparquet extension.",
 )
 @click.option(
     "--partitions",
@@ -156,21 +164,21 @@ def convert_wkb(input_file, output_file, partitions, scheduler):
     """
     Convert a WKB-based Parquet file (e.g. from marinecadastre.gov) to a standard GeoParquet file.
     """
+    output_file = output_file or _default_output_path(input_file, ".geoparquet")
     run_wkb_conversion(input_file, output_file, partitions, scheduler)
 
 
 @convert.command(name="ndjson")
-@click.option(
-    "--input-file",
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to input NDJSON file.",
 )
 @click.option(
     "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Path to output GeoParquet file.",
+    default=None,
+    help="Path to output GeoParquet file. Defaults to input file name with .geoparquet extension.",
 )
 @click.option(
     "--scheduler",
@@ -182,21 +190,21 @@ def convert_ndjson(input_file, output_file, scheduler):
     """
     Convert an NDJSON file (e.g. from Rijkswaterstaat) to a standard flat GeoParquet file using Dask Bag.
     """
+    output_file = output_file or _default_output_path(input_file, ".geoparquet")
     run_ndjson_conversion(input_file, output_file, scheduler)
 
 
 @convert.command(name="csv")
-@click.option(
-    "--input-file",
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to input CSV (or zipped CSV) file.",
 )
 @click.option(
     "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Path to output GeoParquet file.",
+    default=None,
+    help="Path to output GeoParquet file. Defaults to input file name with .geoparquet extension.",
 )
 @click.option(
     "--scheduler",
@@ -208,6 +216,7 @@ def convert_csv(input_file, output_file, scheduler):
     """
     Convert a CSV (or zipped CSV) file (e.g. from aisdata.ais.dk) to a standard flat GeoParquet file.
     """
+    output_file = output_file or _default_output_path(input_file, ".geoparquet")
     run_csv_conversion(input_file, output_file, scheduler)
 
 
@@ -259,17 +268,16 @@ def trajectory():
 
 
 @trajectory.command(name="compute")
-@click.option(
-    "--input-file",
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to input raw AIS Parquet directory/file.",
 )
 @click.option(
     "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Path to output trajectorized Parquet directory.",
+    default=None,
+    help="Path to output trajectorized Parquet directory. Defaults to input file name with -trajectorized.geoparquet extension.",
 )
 @click.option(
     "--vessel-id-col",
@@ -347,6 +355,7 @@ def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, sche
     """
     Voyage segmentation and feature engineering on Dask.
     """
+    output_file = output_file or _default_output_path(input_file, "-trajectorized.geoparquet")
     import dask_geopandas
     from dask.distributed import Client
     import pandas as pd
@@ -400,17 +409,16 @@ def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, sche
 
 
 @trajectory.command(name="to-linestring")
-@click.option(
-    "--input-file",
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to trajectorized point parquet file.",
 )
 @click.option(
     "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Path to output GeoParquet file.",
+    default=None,
+    help="Path to output GeoParquet file. Defaults to input file name with -lines.geoparquet extension.",
 )
 @click.option(
     "--vessel-codes-json",
@@ -422,21 +430,21 @@ def to_linestring(input_file, output_file, vessel_codes_json):
     """
     Aggregate points to LineString/MultiLineString trajectories matching Marine Cadastre schema.
     """
+    output_file = output_file or _default_output_path(input_file, "-lines.geoparquet")
     run_linestring_generation(input_file, output_file, vessel_codes_json)
 
 
 @trajectory.command(name="to-segment")
-@click.option(
-    "--input-file",
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to trajectorized point parquet file.",
 )
 @click.option(
     "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Path to output segments GeoParquet file.",
+    default=None,
+    help="Path to output segments GeoParquet file. Defaults to input file name with -segments.geoparquet extension.",
 )
 @click.option(
     "--epoch-time",
@@ -448,6 +456,7 @@ def to_segment(input_file, output_file, epoch_time):
     """
     Generate point-pair line segments from trajectorized point trajectories.
     """
+    output_file = output_file or _default_output_path(input_file, "-segments.geoparquet")
     run_segment_generation(input_file, output_file, epoch_time)
 
 

@@ -1,5 +1,12 @@
 from click.testing import CliRunner
-from ais_shader.cli import cli
+from ais_shader.cli import cli, _default_output_path
+from pathlib import Path
+
+def test_default_output_path():
+    assert _default_output_path(Path("foo.csv"), ".geoparquet") == Path("foo.geoparquet")
+    assert _default_output_path(Path("foo.csv.zip"), ".geoparquet") == Path("foo.geoparquet")
+    assert _default_output_path(Path("foo.geoparquet"), "-trajectorized.geoparquet") == Path("foo-trajectorized.geoparquet")
+    assert _default_output_path(Path("foo-trajectorized.geoparquet"), "-lines.geoparquet") == Path("foo-lines.geoparquet")
 
 def test_cli_help():
     runner = CliRunner()
