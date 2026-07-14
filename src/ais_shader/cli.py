@@ -393,7 +393,7 @@ def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, sche
 
         logger.info(f"Saving trajectorized dataset to {output_file}...")
         res_ddf = res_ddf.reset_index(drop=True)
-        res_ddf.to_parquet(output_file)
+        res_ddf.to_parquet(output_file, overwrite=True)
         logger.info("Trajectorization complete!")
     finally:
         client.close()
