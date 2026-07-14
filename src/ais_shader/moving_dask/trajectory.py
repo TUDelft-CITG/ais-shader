@@ -261,6 +261,9 @@ def process_single_vessel_partition(
     """
     has_halo_col = '_is_halo' in df.columns
 
+    # Filter out points with missing coordinates for trajectory processing
+    df = df.dropna(subset=[x_col, y_col])
+
     if df.empty:
         if has_halo_col and '_is_halo' not in df.columns:
             df['_is_halo'] = pd.Series(dtype='bool')
