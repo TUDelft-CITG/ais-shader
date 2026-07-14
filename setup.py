@@ -14,14 +14,15 @@ if "LIBRARY_PATH" in os.environ:
     library_dirs.extend(p for p in os.environ["LIBRARY_PATH"].split(os.pathsep) if p)
 
 # 2. Add common search paths on macOS and Linux if they exist
-common_prefixes = ["/opt/homebrew", "/opt/local", "/usr/local"]
+from pathlib import Path
+common_prefixes = [Path("/opt/homebrew"), Path("/opt/local"), Path("/usr/local")]
 for prefix in common_prefixes:
-    inc_path = os.path.join(prefix, "include")
-    lib_path = os.path.join(prefix, "lib")
-    if os.path.isdir(inc_path) and inc_path not in include_dirs:
-        include_dirs.append(inc_path)
-    if os.path.isdir(lib_path) and lib_path not in library_dirs:
-        library_dirs.append(lib_path)
+    inc_path = prefix / "include"
+    lib_path = prefix / "lib"
+    if inc_path.is_dir() and str(inc_path) not in include_dirs:
+        include_dirs.append(str(inc_path))
+    if lib_path.is_dir() and str(lib_path) not in library_dirs:
+        library_dirs.append(str(lib_path))
 
 # 3. Dynamic lookup for Macports versioned Boost subdirectory (if present)
 if sys.platform == "darwin":

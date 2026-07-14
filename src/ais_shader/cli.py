@@ -19,13 +19,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def _default_output_path(input_path: Path, suffix: str) -> Path:
-    import os
     stem = input_path.name
-    # Strip common suffixes sequentially (e.g., .csv.zip -> .csv -> base)
+    # Strip common suffixes sequentially (e.g., .csv.zip -> .csv -> base) using pathlib
     while True:
-        base, ext = os.path.splitext(stem)
+        ext = Path(stem).suffix
         if ext.lower() in {".zip", ".csv", ".ndjson", ".parquet", ".geoparquet"}:
-            stem = base
+            stem = stem[:-len(ext)]
         else:
             break
     # Strip trailing trajectory processing suffixes to avoid accumulation
