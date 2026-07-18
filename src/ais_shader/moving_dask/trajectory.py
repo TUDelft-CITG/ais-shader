@@ -120,7 +120,10 @@ def add_hilbert_index(
     
     xs = df[x_col].values
     ys = df[y_col].values
-    ts = df[time_col].astype('datetime64[s]').astype('int64').values
+    series_dt = df[time_col]
+    if hasattr(series_dt.dt, "tz") and series_dt.dt.tz is not None:
+        series_dt = series_dt.dt.tz_localize(None)
+    ts = series_dt.astype('datetime64[s]').astype('int64').values
     
     xd = x_max - x_min if x_max != x_min else 1.0
     yd = y_max - y_min if y_max != y_min else 1.0

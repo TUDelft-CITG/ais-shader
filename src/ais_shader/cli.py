@@ -1,5 +1,7 @@
 import logging
 import sys
+import warnings
+warnings.filterwarnings("ignore")
 from pathlib import Path
 import click
 import tomllib
@@ -9,6 +11,7 @@ from .renderer import run_rendering
 from .postprocessing import run_post_processing
 from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_csv_conversion, run_linestring_generation, run_segment_generation, normalize_to_epoch
 from .analysis import run_passage_analysis
+from .data_loader import detect_hive_partitioning
 
 # Configure logging
 logging.basicConfig(
@@ -375,7 +378,22 @@ def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, sche
         
     try:
         logger.info(f"Reading input from {input_file}...")
-        ddf = dask_geopandas.read_parquet(input_file)
+        read_kwargs = {}
+        partitioning = detect_hive_partitioning(Path(input_file))
+        if partitioning is not None:
+            read_kwargs["dataset"] = {"partitioning": partitioning}
+
+        try:
+            ddf = dask_geopandas.read_parquet(input_file, **read_kwargs)
+        except Exception as exc:
+            raise click.ClickException(
+                f"Input {input_file} must be a GeoParquet dataset readable by dask_geopandas."
+            ) from exc
+
+        if not isinstance(ddf, dask_geopandas.GeoDataFrame):
+            raise click.ClickException(
+                f"Input {input_file} must be a GeoParquet dataset readable by dask_geopandas."
+            )
 
         # Drop empty coordinates immediately so they don't distort spatial partitioning/Hilbert divisions
         ddf = ddf.dropna(subset=[x_col, y_col])

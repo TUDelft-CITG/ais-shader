@@ -5,7 +5,7 @@ input_file = "/Users/baart_f/data/ais/AISVesselTracks2024_processed.parquet"
 zoom = 10
 tile_size = 1024
 line_width = 1
-category_column = "VesselGroup" # Column to group counts by
+category_column = "" # Column to group counts by
 bbox = [-174.0, 11.0, -60.0, 51.5]  # Full extent calculated from dataing Box (EPSG:4326): MinX, MinY, MaxX, MaxY
 batch_size = 20
 

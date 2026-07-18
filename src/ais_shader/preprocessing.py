@@ -5,6 +5,7 @@ import dask_geopandas
 import geopandas as gpd
 import pandas as pd
 from dask.distributed import Client
+from .data_loader import detect_hive_partitioning
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,11 @@ def run_preprocessing(input_file: Path, output_file: Path, partitions: int, sche
         ddf_geo = dask_geopandas.read_file(input_file, npartitions=partitions if partitions else 4)
     else:
         logger.info("Reading as GeoParquet...")
-        ddf_geo = dask_geopandas.read_parquet(input_file, gather_spatial_partitions=False)
+        read_kwargs = {"categories": []}
+        partitioning = detect_hive_partitioning(Path(input_file))
+        if partitioning is not None:
+            read_kwargs["dataset"] = {"partitioning": partitioning}
+        ddf_geo = dask_geopandas.read_parquet(input_file, gather_spatial_partitions=False, **read_kwargs)
         if partitions:
             ddf_geo = ddf_geo.partitions[:partitions]
         
@@ -363,19 +368,25 @@ def run_linestring_generation(input_file: Path, output_file: Path, vessel_codes_
     logger.info(f"Loading trajectorized points from {input_file}...")
     gdf = gpd.read_parquet(input_file)
     
+    # Dynamically detect time and vessel columns
+    time_col = 'base_date_time' if 'base_date_time' in gdf.columns else ('timestamp' if 'timestamp' in gdf.columns else None)
+    vessel_col = 'mmsi' if 'mmsi' in gdf.columns else ('track_id' if 'track_id' in gdf.columns else None)
+    if not time_col or not vessel_col:
+        raise KeyError(f"Could not find time column or vessel ID column in dataset schema. Available columns: {list(gdf.columns)}")
+
     logger.info("Sorting data chronologically per trip...")
-    gdf = gdf.sort_values(by=['trip_id', 'base_date_time'])
+    gdf = gdf.sort_values(by=['trip_id', time_col])
     
     logger.info("Aggregating points to linestrings...")
     grouped = gdf.groupby('trip_id')
     
-    mmsis = grouped['mmsi'].first()
-    start_times = grouped['base_date_time'].min()
-    end_times = grouped['base_date_time'].max()
-    vessel_types = grouped['shiptypeAIS'].first()
-    lengths = grouped['length'].first()
-    widths = grouped['beam'].first()
-    drafts = grouped['draught'].first()
+    mmsis = grouped[vessel_col].first()
+    start_times = grouped[time_col].min()
+    end_times = grouped[time_col].max()
+    vessel_types = grouped['shiptypeAIS'].first() if 'shiptypeAIS' in gdf.columns else grouped.get_group(list(grouped.groups.keys())[0]).iloc[0].get('shiptypeAIS', np.nan)
+    lengths = grouped['length'].first() if 'length' in gdf.columns else np.nan
+    widths = grouped['beam'].first() if 'beam' in gdf.columns else np.nan
+    drafts = grouped['draught'].first() if 'draught' in gdf.columns else np.nan
     
     geoms = []
     valid_trip_ids = []
@@ -403,10 +414,10 @@ def run_linestring_generation(input_file: Path, output_file: Path, vessel_codes_
         'MMSI': mmsis.loc[valid_trip_ids].values,
         'TrackStartTime': start_times.loc[valid_trip_ids].values,
         'TrackEndTime': end_times.loc[valid_trip_ids].values,
-        'VesselType': vessel_types.loc[valid_trip_ids].values,
-        'Length': lengths.loc[valid_trip_ids].values,
-        'Width': widths.loc[valid_trip_ids].values,
-        'Draft': drafts.loc[valid_trip_ids].values,
+        'VesselType': vessel_types.loc[valid_trip_ids].values if hasattr(vessel_types, 'loc') else [vessel_types]*len(valid_trip_ids),
+        'Length': lengths.loc[valid_trip_ids].values if hasattr(lengths, 'loc') else [lengths]*len(valid_trip_ids),
+        'Width': widths.loc[valid_trip_ids].values if hasattr(widths, 'loc') else [widths]*len(valid_trip_ids),
+        'Draft': drafts.loc[valid_trip_ids].values if hasattr(drafts, 'loc') else [drafts]*len(valid_trip_ids),
     }, index=valid_trip_ids)
     
     durations = (df_attrs['TrackEndTime'] - df_attrs['TrackStartTime']).dt.total_seconds() / 60.0
@@ -490,17 +501,23 @@ def run_segment_generation(input_file: Path, output_file: Path, epoch_time: bool
     logger.info(f"Loading trajectorized points from {input_file}...")
     gdf = gpd.read_parquet(input_file)
     
+    # Dynamically detect time and vessel columns
+    time_col = 'base_date_time' if 'base_date_time' in gdf.columns else ('timestamp' if 'timestamp' in gdf.columns else None)
+    vessel_col = 'mmsi' if 'mmsi' in gdf.columns else ('track_id' if 'track_id' in gdf.columns else None)
+    if not time_col or not vessel_col:
+        raise KeyError(f"Could not find time column or vessel ID column in dataset schema. Available columns: {list(gdf.columns)}")
+
     logger.info("Sorting data chronologically per trip...")
-    gdf = gdf.sort_values(by=['trip_id', 'base_date_time'])
+    gdf = gdf.sort_values(by=['trip_id', time_col])
     
     if epoch_time:
         logger.info("Calculating trip start times and epoch-normalized timestamps...")
-        gdf = normalize_to_epoch(gdf, 'base_date_time')
+        gdf = normalize_to_epoch(gdf, time_col)
         
     # Decompose into 2-point Line Segments (Pairs)
     logger.info("Generating point-pair line segments...")
     shifted = gdf.groupby('trip_id').shift(-1)
-    mask = shifted['base_date_time'].notna()
+    mask = shifted[time_col].notna()
     p1 = gdf[mask]
     p2 = shifted[mask]
     
@@ -514,16 +531,16 @@ def run_segment_generation(input_file: Path, output_file: Path, epoch_time: bool
     geoms = shapely.linestrings(coords)
     
     df_segments = pd.DataFrame({
-        'MMSI': p1['mmsi'].values,
+        'MMSI': p1[vessel_col].values,
         'trip_id': p1['trip_id'].values,
-        'VesselType': p1['shiptypeAIS'].values,
-        'Length': p1['length'].values,
-        'Width': p1['beam'].values,
-        'Draft': p1['draught'].values,
-        'segment_start_time': p1['base_date_time'].values,
-        'segment_end_time': p2['base_date_time'].values,
-        'speed_mps': p1['speed_mps'].values,
-        'acceleration_mps2': p1['acceleration_mps2'].values,
+        'VesselType': p1['shiptypeAIS'].values if 'shiptypeAIS' in p1.columns else np.nan,
+        'Length': p1['length'].values if 'length' in p1.columns else np.nan,
+        'Width': p1['beam'].values if 'beam' in p1.columns else np.nan,
+        'Draft': p1['draught'].values if 'draught' in p1.columns else np.nan,
+        'segment_start_time': p1[time_col].values,
+        'segment_end_time': p2[time_col].values,
+        'speed_mps': p1['speed_mps'].values if 'speed_mps' in p1.columns else np.nan,
+        'acceleration_mps2': p1['acceleration_mps2'].values if 'acceleration_mps2' in p1.columns else np.nan,
     })
     
     df_segments['segment_duration_s'] = (df_segments['segment_end_time'] - df_segments['segment_start_time']).dt.total_seconds()

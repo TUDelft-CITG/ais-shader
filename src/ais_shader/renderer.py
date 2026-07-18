@@ -52,7 +52,7 @@ def render_tile_task(gdf_local, tile, zarr_dir, config):
     elif line_width == 0:
         agg = cvs.line(gdf_local, geometry='geometry', agg=ds.count())
     else:
-        agg = cvs.line(gdf_local, geometry='geometry', line_width=line_width)
+        agg = cvs.line(gdf_local, geometry='geometry', agg=ds.count(), line_width=line_width)
 
     # --- Save Zarr (Counts) ---
     # Create transform
@@ -61,9 +61,9 @@ def render_tile_task(gdf_local, tile, zarr_dir, config):
     # Prepare DataArray for saving
     if isinstance(agg, xr.Dataset):
         da = agg.to_array(dim="band")
-        da = da.fillna(0).astype("int32")
+        da = da.fillna(0).astype("float32")
     else:
-        da = agg.fillna(0).astype("int32")
+        da = agg.fillna(0).astype("float32")
         da = da.expand_dims(dim={'band': 1})
 
     # Set CRS and Transform
