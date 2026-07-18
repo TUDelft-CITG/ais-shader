@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
-from pyproj import CRS, Transformer
+from pyproj import CRS, Transformer, Geod
 import geopandas as gpd
 import dask
 import dask.dataframe as dd
@@ -233,6 +233,57 @@ def apply_halo(
         return combined
         
     return curr_df
+
+_WGS84_GEOD = Geod(ellps="WGS84")
+
+DEFAULT_OUTLIER_V_MAX = 50.0  # m/s
+DEFAULT_OUTLIER_D_MIN = 300.0  # meters
+
+def geodesic_distance_m(lon1: np.ndarray, lat1: np.ndarray, lon2: np.ndarray, lat2: np.ndarray) -> np.ndarray:
+    """Vectorized WGS84 ellipsoidal geodesic distance in meters between paired (lon, lat) points."""
+    _, _, dist = _WGS84_GEOD.inv(lon1, lat1, lon2, lat2)
+    return dist
+
+def filter_speed_outliers(lon: np.ndarray, lat: np.ndarray, t_seconds: np.ndarray, v_max: float = DEFAULT_OUTLIER_V_MAX, d_min: float = DEFAULT_OUTLIER_D_MIN, max_iterations: int = 10) -> np.ndarray:
+    """
+    Vectorized re-implementation of movingpandas.OutlierCleaner's speed-spike
+    detection for a single, time-sorted trajectory of (lon, lat) coordinates,
+    with a joint speed-and-distance gate: a point is only dropped if its jump
+    from the last *kept* point is both faster than v_max AND farther than d_min.
+
+    The distance gate matters because raw speed (distance/dt) is misleadingly
+    sensitive when dt is tiny -- a harmless few-meter GPS jitter over 1-2 seconds
+    can look like an absurd speed despite being spatially insignificant. Requiring
+    a real minimum distance avoids flagging that kind of noise while still
+    catching genuine long-distance teleports.
+
+    The reference algorithm (movingpandas) walks points one at a time and drops
+    any point whose jump from the last *kept* point exceeds the threshold(s),
+    without ever advancing that anchor past a dropped point -- so a run of
+    consecutive bad points all get compared against the same last-good point.
+    Recomputing plain consecutive diffs on the surviving array after each drop
+    reproduces that same "anchor doesn't advance" behavior without a per-row
+    Python loop: each pass is fully vectorized, and it converges in as many
+    passes as the longest run of consecutive outliers (typically 1-2 for
+    isolated GPS/AIS spikes).
+
+    Returns a boolean keep-mask aligned with the input arrays.
+    """
+    n = len(lon)
+    keep = np.ones(n, dtype=bool)
+    for _ in range(max_iterations):
+        idx = np.flatnonzero(keep)
+        if len(idx) < 2:
+            break
+        dist = geodesic_distance_m(lon[idx[:-1]], lat[idx[:-1]], lon[idx[1:]], lat[idx[1:]])
+        dt = t_seconds[idx[1:]] - t_seconds[idx[:-1]]
+        with np.errstate(divide='ignore', invalid='ignore'):
+            speed = np.where(dt > 0, dist / dt, np.inf)
+        bad = (speed > v_max) & (dist > d_min)
+        if not bad.any():
+            break
+        keep[idx[1:][bad]] = False
+    return keep
 
 def process_single_vessel_partition(
     df: pd.DataFrame,

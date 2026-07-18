@@ -166,7 +166,13 @@ def run_benchmark_suite(
     try:
         # Load sample data
         logger.info(f"Loading dataset: {dataset_path}...")
-        ddf = dd.read_parquet(dataset_path)
+        from pathlib import Path
+        from ais_shader.data_loader import detect_hive_partitioning
+        read_kwargs = {}
+        partitioning = detect_hive_partitioning(Path(dataset_path))
+        if partitioning is not None:
+            read_kwargs["dataset"] = {"partitioning": partitioning}
+        ddf = dd.read_parquet(dataset_path, **read_kwargs)
         if ddf.npartitions < 32:
             logger.info(f"Dataset has only {ddf.npartitions} partitions. Repartitioning to 32 partitions to enable cluster parallelization...")
             ddf = ddf.repartition(npartitions=32)

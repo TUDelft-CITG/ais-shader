@@ -9,7 +9,7 @@ import tomllib
 # Import from src modules
 from .renderer import run_rendering
 from .postprocessing import run_post_processing
-from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_csv_conversion, run_linestring_generation, run_segment_generation, normalize_to_epoch
+from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_csv_conversion, run_linestring_generation, run_segment_generation, run_outlier_filtering, normalize_to_epoch
 from .analysis import run_passage_analysis
 from .data_loader import detect_hive_partitioning
 
@@ -31,7 +31,7 @@ def _default_output_path(input_path: Path, suffix: str) -> Path:
         else:
             break
     # Strip trailing trajectory processing suffixes to avoid accumulation
-    for s in ["-trajectorized", "-lines", "-segments"]:
+    for s in ["-trajectorized", "-lines", "-segments", "-cleaned"]:
         if stem.endswith(s):
             stem = stem[:-len(s)]
     return input_path.with_name(f"{stem}{suffix}")
@@ -277,6 +277,39 @@ def trajectory():
 
 
 
+@trajectory.command(name="filter-outliers")
+@click.argument(
+    "input-file",
+    type=click.Path(exists=True, path_type=Path),
+)
+@click.option(
+    "--output-file",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to output cleaned GeoParquet file. Defaults to input file name with -cleaned.geoparquet extension.",
+)
+@click.option(
+    "--config-file",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Optional path to a TOML config file with an [outlier] section (v_max, d_min). Falls back to defaults (v_max=50.0, d_min=300.0) if omitted.",
+)
+def filter_outliers(input_file, output_file, config_file):
+    """
+    Drop speed-implausible position outliers per vessel from preprocessed points.
+    """
+    output_file = output_file or _default_output_path(input_file, "-cleaned.geoparquet")
+    v_max, d_min = None, None
+    if config_file:
+        with open(config_file, "rb") as f:
+            config = tomllib.load(f)
+        outlier_cfg = config.get("outlier", {})
+        v_max = outlier_cfg.get("v_max")
+        d_min = outlier_cfg.get("d_min")
+    run_outlier_filtering(input_file, output_file, v_max=v_max, d_min=d_min)
+
+
 @trajectory.command(name="compute")
 @click.argument(
     "input-file",
@@ -470,12 +503,18 @@ def to_linestring(input_file, output_file, vessel_codes_json):
     default=False,
     help="Represent segment start/end timestamps as epoch-relative times.",
 )
-def to_segment(input_file, output_file, epoch_time):
+@click.option(
+    "--vessel-codes-json",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to JSON mapping file for vessel type classification.",
+)
+def to_segment(input_file, output_file, epoch_time, vessel_codes_json):
     """
     Generate point-pair line segments from trajectorized point trajectories.
     """
     output_file = output_file or _default_output_path(input_file, "-segments.geoparquet")
-    run_segment_generation(input_file, output_file, epoch_time)
+    run_segment_generation(input_file, output_file, epoch_time, vessel_codes_json)
 
 
 # Register trajectory commands

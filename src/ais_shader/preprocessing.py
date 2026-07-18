@@ -3,9 +3,11 @@ from pathlib import Path
 import dask.dataframe as dd
 import dask_geopandas
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from dask.distributed import Client
 from .data_loader import detect_hive_partitioning
+from .moving_dask.trajectory import filter_speed_outliers, DEFAULT_OUTLIER_V_MAX, DEFAULT_OUTLIER_D_MIN
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +19,86 @@ def convert_to_gdf(df: pd.DataFrame) -> gpd.GeoDataFrame:
     gs = gpd.GeoSeries.from_wkb(df_copy.pop("Shape"))
     gdf = gpd.GeoDataFrame(df_copy, geometry=gs, crs="EPSG:4269")
     return gdf
+
+def build_vessel_mapping(vessel_codes_json: Path = None) -> dict:
+    """
+    Build a {AIS ship type code or label: vessel group name} mapping from an
+    optional JSON file (list of {"vessel_code": ..., "vessel_group": ...}).
+
+    vessel_code may be a numeric AIS code (e.g. 80), a "X to Y" numeric range
+    (expanded to individual int keys), or a string label (e.g. "Tanker", for
+    datasets like the Danish AIS Denmark open data whose 'Ship type' column is
+    already decoded to a string rather than a numeric code) -- stored as a
+    lowercased string key.
+    """
+    vessel_mapping = {}
+    if vessel_codes_json and Path(vessel_codes_json).exists():
+        import json
+        try:
+            logger.info(f"Loading vessel codes mapping from: {vessel_codes_json}...")
+            with open(vessel_codes_json, "r") as f:
+                data = json.load(f)
+                for item in data:
+                    code = item.get("vessel_code")
+                    group = item.get("vessel_group")
+                    if code is None or group is None:
+                        continue
+                    try:
+                        vessel_mapping[int(float(code))] = group
+                    except (ValueError, TypeError):
+                        if isinstance(code, str) and " to " in code:
+                            parts = code.split(" to ")
+                            if len(parts) == 2:
+                                try:
+                                    start = int(float(parts[0]))
+                                    end = int(float(parts[1]))
+                                    for c in range(start, end + 1):
+                                        vessel_mapping[c] = group
+                                except Exception:
+                                    pass
+                        elif isinstance(code, str):
+                            vessel_mapping[code.strip().lower()] = group
+        except Exception as e:
+            logger.warning(f"Failed to load vessel codes JSON: {e}")
+    return vessel_mapping
+
+def get_vessel_group(shiptype, vessel_mapping: dict) -> str:
+    """
+    Recode an AIS ship type into a Marine Cadastre-style vessel group.
+
+    Handles both raw numeric AIS ship type codes (e.g. RWS datasets) and
+    datasets that already provide a decoded string label (e.g.
+    the Danish AIS Denmark open data's 'Ship type' column, which arrives as
+    values like "Tanker" or "HSC" rather than a numeric code) -- string labels
+    are looked up in vessel_mapping (see build_vessel_mapping), supplied via
+    --vessel-codes-json, since there's no universal string vocabulary to bake in.
+    """
+    if not shiptype:
+        return "Other"
+    try:
+        code = int(float(shiptype))
+    except (ValueError, TypeError):
+        return vessel_mapping.get(str(shiptype).strip().lower(), "Other")
+
+    if code in vessel_mapping:
+        return vessel_mapping[code]
+
+    if code == 30:
+        return "Fishing"
+    elif code in [31, 32, 52]:
+        return "Tug"
+    elif code == 35:
+        return "Military"
+    elif code in [36, 37]:
+        return "Pleasure Craft/Sailing"
+    elif 60 <= code <= 69:
+        return "Passenger"
+    elif 70 <= code <= 79:
+        return "Cargo"
+    elif 80 <= code <= 89:
+        return "Tanker"
+    else:
+        return "Other"
 
 def normalize_to_epoch(df: pd.DataFrame, time_col: str = 'base_date_time') -> pd.DataFrame:
     """Normalizes timestamps in a vessel trajectory dataframe to be epoch-relative (starting at 1970-01-01)."""
@@ -423,62 +505,8 @@ def run_linestring_generation(input_file: Path, output_file: Path, vessel_codes_
     durations = (df_attrs['TrackEndTime'] - df_attrs['TrackStartTime']).dt.total_seconds() / 60.0
     df_attrs['DurationMinutes'] = durations.round().astype(int)
     
-    vessel_mapping = {}
-    if vessel_codes_json and Path(vessel_codes_json).exists():
-        import json
-        try:
-            logger.info(f"Loading vessel codes mapping from: {vessel_codes_json}...")
-            with open(vessel_codes_json, "r") as f:
-                data = json.load(f)
-                for item in data:
-                    code = item.get("vessel_code")
-                    group = item.get("vessel_group")
-                    if code is not None and group is not None:
-                        try:
-                            vessel_mapping[int(float(code))] = group
-                        except (ValueError, TypeError):
-                            if isinstance(code, str) and " to " in code:
-                                parts = code.split(" to ")
-                                if len(parts) == 2:
-                                    try:
-                                        start = int(float(parts[0]))
-                                        end = int(float(parts[1]))
-                                        for c in range(start, end + 1):
-                                            vessel_mapping[c] = group
-                                    except Exception:
-                                        pass
-        except Exception as e:
-            logger.warning(f"Failed to load vessel codes JSON: {e}")
-
-    def get_vessel_group(shiptype):
-        if not shiptype:
-            return "Other"
-        try:
-            code = int(float(shiptype))
-        except (ValueError, TypeError):
-            return "Other"
-            
-        if code in vessel_mapping:
-            return vessel_mapping[code]
-            
-        if code == 30:
-            return "Fishing"
-        elif code in [31, 32, 52]:
-            return "Tug"
-        elif code == 35:
-            return "Military"
-        elif code in [36, 37]:
-            return "Pleasure Craft/Sailing"
-        elif 60 <= code <= 69:
-            return "Passenger"
-        elif 70 <= code <= 79:
-            return "Cargo"
-        elif 80 <= code <= 89:
-            return "Tanker"
-        else:
-            return "Other"
-            
-    df_attrs['VesselGroup'] = df_attrs['VesselType'].apply(get_vessel_group)
+    vessel_mapping = build_vessel_mapping(vessel_codes_json)
+    df_attrs['VesselGroup'] = df_attrs['VesselType'].apply(lambda st: get_vessel_group(st, vessel_mapping))
     
     gdf_lines = gpd.GeoDataFrame(df_attrs, geometry=geoms, crs="EPSG:4326")
     
@@ -489,7 +517,53 @@ def run_linestring_generation(input_file: Path, output_file: Path, vessel_codes_
     logger.info("Line generation complete!")
 
 
-def run_segment_generation(input_file: Path, output_file: Path, epoch_time: bool = False):
+def run_outlier_filtering(input_file: Path, output_file: Path, v_max: float = None, d_min: float = None):
+    """
+    Drop speed-implausible position outliers per vessel from a preprocessed point
+    dataset, using a vectorized re-implementation of movingpandas.OutlierCleaner
+    with a joint speed-and-distance gate: a point is dropped only if its jump from
+    the last kept point exceeds both v_max (m/s) and d_min (meters).
+    """
+    v_max = DEFAULT_OUTLIER_V_MAX if v_max is None else v_max
+    d_min = DEFAULT_OUTLIER_D_MIN if d_min is None else d_min
+
+    logger.info(f"Loading points from {input_file}...")
+    gdf = gpd.read_parquet(input_file)
+
+    time_col = 'base_date_time' if 'base_date_time' in gdf.columns else ('timestamp' if 'timestamp' in gdf.columns else None)
+    vessel_col = 'mmsi' if 'mmsi' in gdf.columns else ('track_id' if 'track_id' in gdf.columns else None)
+    if not time_col or not vessel_col:
+        raise KeyError(f"Could not find time column or vessel ID column in dataset schema. Available columns: {list(gdf.columns)}")
+
+    logger.info("Sorting data chronologically per vessel...")
+    gdf = gdf.sort_values(by=[vessel_col, time_col]).reset_index(drop=True)
+
+    lon_all = gdf['longitude'].values
+    lat_all = gdf['latitude'].values
+    t_all = gdf[time_col].values.astype('datetime64[s]').astype('float64')
+    keep_mask = np.ones(len(gdf), dtype=bool)
+
+    logger.info(f"Detecting speed-implausible position outliers per vessel (v_max={v_max} m/s, d_min={d_min} m)...")
+    for _, group in gdf.groupby(vessel_col, sort=False):
+        pos = group.index.values
+        if len(pos) < 2:
+            continue
+        lon, lat, t = lon_all[pos], lat_all[pos], t_all[pos]
+        mask = filter_speed_outliers(lon, lat, t, v_max=v_max, d_min=d_min)
+        if not mask.all():
+            keep_mask[pos[~mask]] = False
+
+    n_dropped = int((~keep_mask).sum())
+    logger.info(f"Dropped {n_dropped} outlier point(s) out of {len(gdf)}.")
+    gdf_clean = gdf[keep_mask]
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Saving cleaned points to {output_file}...")
+    gdf_clean.to_parquet(output_file)
+    logger.info("Outlier filtering complete!")
+
+
+def run_segment_generation(input_file: Path, output_file: Path, epoch_time: bool = False, vessel_codes_json: Path = None):
     """
     Generate point-pair line segments from trajectorized point dataset,
     with option to use epoch-normalized timestamps.
@@ -525,15 +599,22 @@ def run_segment_generation(input_file: Path, output_file: Path, epoch_time: bool
     y1 = p1['latitude'].values
     x2 = p2['longitude'].values
     y2 = p2['latitude'].values
-    
+
     coords = np.column_stack([x1, y1, x2, y2]).reshape(-1, 2, 2)
     logger.info("Creating LineString geometries...")
     geoms = shapely.linestrings(coords)
-    
+
+    vessel_mapping = build_vessel_mapping(vessel_codes_json)
+    if 'shiptypeAIS' in p1.columns:
+        vessel_groups = pd.Series(p1['shiptypeAIS'].values).apply(lambda st: get_vessel_group(st, vessel_mapping)).values
+    else:
+        vessel_groups = "Other"
+
     df_segments = pd.DataFrame({
         'MMSI': p1[vessel_col].values,
         'trip_id': p1['trip_id'].values,
         'VesselType': p1['shiptypeAIS'].values if 'shiptypeAIS' in p1.columns else np.nan,
+        'VesselGroup': vessel_groups,
         'Length': p1['length'].values if 'length' in p1.columns else np.nan,
         'Width': p1['beam'].values if 'beam' in p1.columns else np.nan,
         'Draft': p1['draught'].values if 'draught' in p1.columns else np.nan,
@@ -542,6 +623,20 @@ def run_segment_generation(input_file: Path, output_file: Path, epoch_time: bool
         'speed_mps': p1['speed_mps'].values if 'speed_mps' in p1.columns else np.nan,
         'acceleration_mps2': p1['acceleration_mps2'].values if 'acceleration_mps2' in p1.columns else np.nan,
     })
+
+    # Extract, clean, and add SOG variable (1023 represents 'not available', 1022 represents '>=102.2 knots')
+    if 'sog' in p1.columns:
+        sog_vals = p1['sog'].astype(float).values.copy()
+        # Handle both scaled (divided by 10) and unscaled invalid SOG values
+        invalid_mask = (sog_vals >= 1023.0) | (sog_vals >= 102.3)
+        sog_vals[invalid_mask] = np.nan
+        
+        cap_mask = (sog_vals == 1022.0) | (sog_vals == 102.2)
+        sog_vals[cap_mask] = 102.2
+        
+        df_segments['sog'] = sog_vals
+    else:
+        df_segments['sog'] = np.nan
     
     df_segments['segment_duration_s'] = (df_segments['segment_end_time'] - df_segments['segment_start_time']).dt.total_seconds()
     gdf_segments = gpd.GeoDataFrame(df_segments, geometry=geoms, crs="EPSG:4326")
