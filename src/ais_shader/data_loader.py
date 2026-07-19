@@ -2,15 +2,14 @@ import logging
 from pathlib import Path
 
 import dask_geopandas
+import pyarrow as pa
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 
 logger = logging.getLogger(__name__)
 
 
 def detect_hive_partitioning(input_path: Path):
-    import pyarrow as pa
-    import pyarrow.dataset as ds
-    import pyarrow.parquet as pq
-
     if not input_path.is_dir():
         return None
 
@@ -48,7 +47,11 @@ def detect_hive_partitioning(input_path: Path):
         if parquet_files:
             file_schema = pq.read_metadata(parquet_files[0]).schema.to_arrow_schema()
     except Exception:
-        pass
+        logger.warning(
+            f"Could not read Parquet schema near {input_path}; falling back to "
+            "inferring partition column types from directory names.",
+            exc_info=True,
+        )
 
     partition_fields = []
     for key, values in sorted(partition_keys.items()):
@@ -83,9 +86,13 @@ def load_and_process_data(input_file: Path, partitions: int = None):
         if original_spatial_partitions is not None:
              ddf_geo.spatial_partitions = original_spatial_partitions[:partitions]
 
-    # Check for spatial partitions
+    # Spatial partitions let render_tiles() prune whole partitions per tile via
+    # .cx[] -- a meaningful speedup for country-scale, multi-partition datasets,
+    # but unnecessary for a small, single-region dataset preprocessed with
+    # --no-spatial-index. .cx[] still filters correctly without them, just
+    # without that pruning, so this is a performance note, not a hard error.
     if ddf_geo.spatial_partitions is None:
-        raise ValueError("Spatial partitions not found in metadata. Spatial partitioning is required.")
+        logger.warning("Spatial partitions not found in metadata; per-tile filtering will scan all partitions.")
 
     # Ensure CRS is correct (should be EPSG:3857 from preprocessing)
     if ddf_geo.crs != "EPSG:3857":

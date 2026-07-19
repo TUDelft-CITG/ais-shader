@@ -1,4 +1,4 @@
-direction: right
+direction: down
 
 classes: {
   process: {
@@ -24,29 +24,112 @@ classes: {
   }
 }
 
-raw_data: Raw AIS Data (CSV/Parquet) {
+raw_data: Raw AIS Data (ndjson/CSV/WKB parquet) {
   class: data
   icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/database.svg
 }
 
-preprocess: Preprocessing {
+convert: Convert {
   class: process
-  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/wrench.svg
-  tooltip: "Converts to GeoParquet & Reprojects"
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/swap-horizontal.svg
+  tooltip: "ndjson | csv | wkb -> flat GeoParquet, hive-partitioned by year/month/day"
 }
 
-processed_data: Spatially Partitioned GeoParquet {
+points: GeoParquet Points {
   class: data
   icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/layers.svg
+}
+
+decision_spatial: Spatial index? {
+  shape: diamond
+  tooltip: "preprocess --spatial-index/--no-spatial-index"
+}
+
+preprocess1: Preprocess (points) {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/wrench.svg
+  tooltip: "Reproject to EPSG:3857, then either calculate_spatial_partitions() or skip it entirely"
+}
+
+points_pre: Preprocessed Points {
+  class: data
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/layers.svg
+}
+
+filter_outliers: Filter Outliers {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/filter-variant.svg
+  tooltip: "Drop speed-implausible position outliers per vessel (v_max, d_min gate)"
+}
+
+cleaned: Cleaned Points {
+  class: data
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/layers.svg
+}
+
+decision_partition: Partition method? {
+  shape: diamond
+  tooltip: "trajectory compute --partition-method vessel|spatiotemporal"
+}
+
+compute: Trajectorize {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/routes.svg
+  tooltip: "Voyage segmentation & feature engineering"
+}
+
+trajectorized: Trajectorized Points {
+  class: artifact
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/layers.svg
+  tooltip: "{tag}_trajectorized.geoparquet -- trip_id, speed_mps, VesselGroup, ...; a usable output on its own, not just an intermediate"
+}
+
+to_segment: To-Segment {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/vector-line.svg
+  tooltip: "Point-pair line segments for rendering"
+}
+
+to_linestring: To-Linestring {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/chart-line-variant.svg
+  tooltip: "Full voyage LineString/MultiLineString per trip"
+}
+
+segments: Line Segments {
+  class: artifact
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/layers.svg
+  tooltip: "{tag}_segments.geoparquet -- point-pair lines; also a usable output on its own, before the render-specific preprocessing"
+}
+
+lines: Voyage LineStrings {
+  class: artifact
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/chart-line-variant.svg
+  tooltip: "{tag}_lines.geoparquet"
+}
+
+preprocess2: Preprocess (segments) {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/wrench.svg
+}
+
+segments_pre: Preprocessed Segments {
+  class: data
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/layers.svg
+}
+
+decision_category: Category breakdown? {
+  shape: diamond
+  tooltip: "config: category_column set (e.g. VesselGroup) or empty"
 }
 
 render: Rendering (Dask + Datashader) {
   class: process
   icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/map.svg
-  tooltip: "Generates raw counts per tile"
+  tooltip: "Canvas.line() per tile; border-expand+crop; direction canonicalization"
 }
 
-zarr_tiles: Zarr Tiles (Raw Counts) {
+zarr_tiles: "Zarr Tiles (band = metric or metric__group)" {
   class: data
   icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/grid.svg
 }
@@ -56,10 +139,16 @@ global_max: Calculate Global Max {
   icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/sigma.svg
 }
 
-post_process: Post-Processing {
+post_process: Post-Processing (PNG pyramid) {
   class: process
   icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/image-filter-hdr.svg
-  tooltip: "Applies colormap & generates pyramid"
+  tooltip: "Builds coarser zoom levels, applies colormap + robust-max normalization, per band"
+}
+
+export_cogs: Export COGs {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/earth.svg
+  tooltip: "export_single_cog: reads base-zoom Zarr tiles directly, no colormap/normalization -- raw band values -> GeoTIFF"
 }
 
 png_tiles: PNG Tiles (XYZ) {
@@ -72,12 +161,35 @@ cogs: Cloud Optimized GeoTIFFs {
   icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/earth.svg
 }
 
-raw_data -> preprocess: Input
-preprocess -> processed_data: Output
-processed_data -> render: Input
+raw_data -> convert: "ndjson | csv | wkb"
+convert -> points: Output
+points -> decision_spatial: Input
+decision_spatial -> preprocess1: "--spatial-index (country-scale)"
+decision_spatial -> preprocess1: "--no-spatial-index (local, single-region example)"
+preprocess1 -> points_pre: Output
+points_pre -> filter_outliers: Input
+filter_outliers -> cleaned: Output
+cleaned -> decision_partition: Input
+decision_partition -> compute: "vessel (shuffle on mmsi, no spatial index)"
+decision_partition -> compute: "spatiotemporal (hilbert, country-scale)"
+compute -> trajectorized: Output
+
+trajectorized -> to_segment: Input
+to_segment -> segments: Output
+trajectorized -> to_linestring: Input
+to_linestring -> lines: Output
+
+segments -> preprocess2: "same --spatial-index choice as above"
+preprocess2 -> segments_pre: Output
+segments_pre -> decision_category: Input
+decision_category -> render: "category_column set -> totals + per-group bands"
+decision_category -> render: "category_column empty -> total bands only"
+
 render -> zarr_tiles: Output
 zarr_tiles -> global_max: Input
 global_max -> post_process: Normalization Factor
 zarr_tiles -> post_process: Input
 post_process -> png_tiles: Output
-post_process -> cogs: Output (Optional)
+
+zarr_tiles -> export_cogs: "--cogs (optional), base zoom only"
+export_cogs -> cogs: Output

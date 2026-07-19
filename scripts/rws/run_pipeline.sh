@@ -17,9 +17,9 @@ BASE_DIR="$(dirname "$DATASET_DIR")"
 INTERMEDIATE_DIR="$BASE_DIR/intermediate"
 MAPS_DIR="$BASE_DIR/maps"
 ZOOM=15
-VESSEL_ID_COL=track_id
-TIME_COL=timestamp
-TAG_PREFIX=rws
+VESSEL_ID_COL="${VESSEL_ID_COL:-mmsi}"
+TIME_COL="${TIME_COL:-base_date_time}"
+TAG_PREFIX="$(basename "$BASE_DIR")"
 
 mkdir -p "$INTERMEDIATE_DIR" "$MAPS_DIR"
 
@@ -37,9 +37,13 @@ process_month() {
     echo "=== Processing ${year}-${month} ==="
 
     # Stage 1: Preprocess Points
+    # --no-spatial-index: this is a small, regional single-area dataset, so
+    # dask-geopandas spatial partitioning (useful for pruning partitions across
+    # a country-scale extent) is pure overhead here.
     uv run ais-shader preprocess \
         --input-file "$DATASET_DIR/year=$year/month=$month" \
-        --output-file "$INTERMEDIATE_DIR/${tag}_preprocessed.geoparquet"
+        --output-file "$INTERMEDIATE_DIR/${tag}_preprocessed.geoparquet" \
+        --no-spatial-index
 
     # Stage 2: Filter Speed/Position Outliers
     uv run ais-shader trajectory filter-outliers \
@@ -61,10 +65,16 @@ process_month() {
         "$INTERMEDIATE_DIR/${tag}_trajectorized.geoparquet" \
         --output-file "$INTERMEDIATE_DIR/${tag}_segments.geoparquet"
 
+    # Stage 4b: Generate full trajectory LineStrings (one line per voyage)
+    uv run ais-shader trajectory to-linestring \
+        "$INTERMEDIATE_DIR/${tag}_trajectorized.geoparquet" \
+        --output-file "$INTERMEDIATE_DIR/${tag}_lines.geoparquet"
+
     # Stage 5: Preprocess Segments
     uv run ais-shader preprocess \
         --input-file "$INTERMEDIATE_DIR/${tag}_segments.geoparquet" \
-        --output-file "$INTERMEDIATE_DIR/${tag}_segments_preprocessed.geoparquet"
+        --output-file "$INTERMEDIATE_DIR/${tag}_segments_preprocessed.geoparquet" \
+        --no-spatial-index
 
     # Stage 6: Render Multi-Band Tiles
     local render_run_dir="$MAPS_DIR/render_run_${tag}"

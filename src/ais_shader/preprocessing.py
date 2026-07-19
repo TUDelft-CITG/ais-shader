@@ -113,7 +113,7 @@ def normalize_to_epoch(df: pd.DataFrame, time_col: str = 'base_date_time') -> pd
     return df
 
 
-def run_preprocessing(input_file: Path, output_file: Path, partitions: int, scheduler: str):
+def run_preprocessing(input_file: Path, output_file: Path, partitions: int, scheduler: str, spatial_index: bool = True):
     """
     Preprocess AIS data: GeoParquet/GPKG -> Reproject -> Spatial Partition -> Save.
     """
@@ -153,16 +153,19 @@ def run_preprocessing(input_file: Path, output_file: Path, partitions: int, sche
     # Reproject
     logger.info("Reprojecting to EPSG:3857...")
     ddf_geo = ddf_geo.to_crs("EPSG:3857")
-    
-    # Persist to ensure data is available for spatial partitioning calculation
-    ddf_geo = ddf_geo.persist()
 
-    # Calculate Spatial Partitions
-    logger.info("Calculating spatial partitions...")
-    ddf_geo.calculate_spatial_partitions()
-    
-    if ddf_geo.spatial_partitions is None:
-         logger.warning("Spatial partitions not set after call!")
+    if spatial_index:
+        # Persist to ensure data is available for spatial partitioning calculation
+        ddf_geo = ddf_geo.persist()
+
+        # Calculate Spatial Partitions
+        logger.info("Calculating spatial partitions...")
+        ddf_geo.calculate_spatial_partitions()
+
+        if ddf_geo.spatial_partitions is None:
+             logger.warning("Spatial partitions not set after call!")
+    else:
+        logger.info("Skipping spatial partition calculation (--no-spatial-index).")
 
     # Save
     logger.info(f"Saving to {output_file}...")
@@ -202,6 +205,14 @@ def run_wkb_conversion(input_file: Path, output_file: Path, partitions: int, sch
     logger.info(f"Saving converted GeoParquet to {output_file}...")
     ddf_geo.to_parquet(output_file)
     logger.info("Done!")
+
+
+def add_date_partitions(df: pd.DataFrame, time_col: str = "base_date_time") -> pd.DataFrame:
+    """Add year/month/day string columns derived from time_col, for Hive-style partitioning on write."""
+    df["year"] = df[time_col].dt.strftime("%Y")
+    df["month"] = df[time_col].dt.strftime("%m")
+    df["day"] = df[time_col].dt.strftime("%d")
+    return df
 
 
 def unwrap_field(obj):
@@ -314,22 +325,24 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
             df.loc[df['longitude'] == 181.0, 'longitude'] = np.nan
             
             geometry = gpd.points_from_xy(df['longitude'], df['latitude'])
-            return gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
-            
+            gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
+            return add_date_partitions(gdf)
+
         meta_gdf = gpd.GeoDataFrame(
             ddf._meta.assign(base_date_time=pd.to_datetime([])),
             geometry=gpd.GeoSeries([], dtype="object"),
             crs="EPSG:4326"
         )
-        
+        meta_gdf = add_date_partitions(meta_gdf)
+
         ddf_geo = ddf.map_partitions(make_points, meta=meta_gdf)
         ddf_geo = dask_geopandas.from_dask_dataframe(ddf_geo, geometry="geometry")
-        
+
         # Make sure directory exists
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"Saving GeoParquet to {output_file}...")
-        ddf_geo.to_parquet(output_file)
+
+        logger.info(f"Saving GeoParquet to {output_file}, partitioned by year/month/day...")
+        ddf_geo.to_parquet(output_file, partition_on=["year", "month", "day"])
         logger.info("NDJSON conversion complete!")
         
     finally:
@@ -408,8 +421,9 @@ def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
             df.loc[df['longitude'] == 181.0, 'longitude'] = np.nan
             
             geometry = gpd.points_from_xy(df['longitude'], df['latitude'])
-            return gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
-            
+            gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
+            return add_date_partitions(gdf)
+
         meta_df = pd.DataFrame(columns=needed_cols)
         meta_df = meta_df.astype({
             'mmsi': 'int64',
@@ -426,14 +440,15 @@ def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
             'shiptypeAIS': 'object'
         })
         meta_gdf = gpd.GeoDataFrame(meta_df, geometry=gpd.GeoSeries([], dtype="object"), crs="EPSG:4326")
-        
+        meta_gdf = add_date_partitions(meta_gdf)
+
         ddf_geo = df.map_partitions(make_points, meta=meta_gdf)
         ddf_geo = dask_geopandas.from_dask_dataframe(ddf_geo, geometry="geometry")
-        
+
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"Saving GeoParquet to {output_file}...")
-        ddf_geo.to_parquet(output_file)
+
+        logger.info(f"Saving GeoParquet to {output_file}, partitioned by year/month/day...")
+        ddf_geo.to_parquet(output_file, partition_on=["year", "month", "day"])
         logger.info("CSV conversion complete!")
         
     finally:

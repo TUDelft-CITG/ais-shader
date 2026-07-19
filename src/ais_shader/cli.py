@@ -132,11 +132,18 @@ def postprocess(run_dir, base_zoom, scheduler, clean_intermediate, cogs, config_
     default=None,
     help="Address of the Dask scheduler (e.g., tcp://127.0.0.1:8786). If None, starts a local cluster.",
 )
-def preprocess(input_file, output_file, partitions, scheduler):
+@click.option(
+    "--spatial-index/--no-spatial-index",
+    default=True,
+    help="Calculate dask-geopandas spatial partitions. Only useful for "
+         "country-scale datasets spanning many partitions/regions; skip it "
+         "for small, single-region datasets to avoid needless overhead.",
+)
+def preprocess(input_file, output_file, partitions, scheduler, spatial_index):
     """
     Preprocess AIS data (GeoParquet/GPKG -> Reproject -> Spatial Partition).
     """
-    run_preprocessing(input_file, output_file, partitions, scheduler)
+    run_preprocessing(input_file, output_file, partitions, scheduler, spatial_index)
 
 @click.group(name="convert")
 def convert():

@@ -250,7 +250,7 @@ def aggregate_children(parent_key, children, var_name="counts"):
             coarsened_bands = []
             for band_name in da_child_aligned.coords["band"].values:
                 da_band = da_child_aligned.sel(band=band_name)
-                if band_name == "transit_count":
+                if band_name.startswith("transit_count"):
                     coarsened_band = da_band.coarsen(y=2, x=2, boundary="trim").sum()
                 else:
                     coarsened_band = da_band.coarsen(y=2, x=2, boundary="trim").mean()
@@ -478,10 +478,10 @@ def run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs,
             band_style = config["style"][band]
             band_colormap = band_style.get("colormap", colormap_name)
             band_log_scale = band_style.get("log_scale", log_scale)
-        elif band == "transit_count":
+        elif band and band.startswith("transit_count"):
             band_colormap = "oslo"
             band_log_scale = True
-        elif band in ("sog", "speed_mps"):
+        elif band and band.startswith(("sog", "speed_mps")):
             band_colormap = "plasma"
             band_log_scale = False
 
