@@ -1,4 +1,6 @@
 import logging
+import random
+import shutil
 import sys
 import tomllib
 from collections import defaultdict
@@ -10,6 +12,7 @@ import datashader.transfer_functions as tf
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
+import rasterio
 import rioxarray
 import xarray as xr
 from dask.distributed import Client, as_completed
@@ -18,6 +21,27 @@ from PIL import Image
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+# Band naming contract, produced by renderer.py's render_tile_task and relied
+# on throughout this module (pyramid coarsening, colormap/log-scale defaults,
+# COG band descriptions):
+#
+#   - A "total" metric band is named exactly after the metric, one of
+#     COUNT_METRIC_PREFIXES or MEAN_METRIC_PREFIXES below (e.g. "transit_count",
+#     "sog", "speed_mps").
+#   - A per-category breakdown band (produced only when config sets
+#     `category_column`) is named "{metric}__{category}", e.g.
+#     "transit_count__Cargo", "sog__Tanker" (see _sanitize_band_name in
+#     renderer.py for how {category} is derived).
+#
+# This prefix is what determines: (a) whether pyramid coarsening should sum
+# a band (count-like) or take a count-weighted mean of it (everything else),
+# and (b) which sibling band supplies the coarsening weights for a mean band
+# (_matching_count_band). Any band not matching this contract falls back to
+# an unweighted mean and default styling -- it is not an error, just less
+# correct/pretty.
+COUNT_METRIC_PREFIXES = ("transit_count",)
+MEAN_METRIC_PREFIXES = ("sog", "speed_mps")
 
 def create_transparent_cmap(base_cmap_name="viridis", min_alpha=0.0, max_alpha=1.0):
     """
@@ -47,6 +71,9 @@ def render_tile(nc_path, output_path, cmap, global_max, var_name="counts", band=
     # Open Zarr
     with xr.open_zarr(nc_path) as ds:
         da = ds[var_name]
+        # Select this specific band's 2D (y, x) slice out of the tile's
+        # multi-band array, when this is the multi-band path (see the
+        # matching check/comment in run_post_processing above).
         if band is not None and "band" in da.coords:
             da = da.sel(band=band)
         
@@ -178,6 +205,31 @@ def export_cogs(run_dir, base_zoom, client, var_name="counts"):
     for _ in tqdm(as_completed(futures), total=len(futures), desc="Exporting COGs"):
         pass
 
+def _detect_zarr_var_name(data_vars):
+    """The Zarr data variable name render_tile_task saved a tile under:
+    "metrics" for the multi-band path, "counts" for the plain-count path, or
+    a custom value_column name otherwise. Prefer the known names; fall back
+    to whatever the tile's one data variable is actually called."""
+    for candidate in ("metrics", "counts"):
+        if candidate in data_vars:
+            return candidate
+    return next(iter(data_vars))
+
+
+def _matching_count_band(band_name, available_bands):
+    """
+    The count band (see COUNT_METRIC_PREFIXES) that should weight a mean
+    band's pyramid coarsening, per the band naming contract at the top of
+    this module: "sog" -> "transit_count", "sog__Cargo" -> "transit_count__Cargo".
+    Returns None if no matching count band is available (falls back to an
+    unweighted mean).
+    """
+    suffix = band_name.split("__", 1)[1] if "__" in band_name else None
+    count_prefix = COUNT_METRIC_PREFIXES[0]
+    candidate = f"{count_prefix}__{suffix}" if suffix else count_prefix
+    return candidate if candidate in available_bands else None
+
+
 def aggregate_children(parent_key, children, var_name="counts"):
     """
     Aggregate child NetCDF files into a single parent DataArray.
@@ -247,13 +299,29 @@ def aggregate_children(parent_key, children, var_name="counts"):
             da_child_aligned = da_child
         
         if "band" in da_child_aligned.coords:
+            band_names = list(da_child_aligned.coords["band"].values)
             coarsened_bands = []
-            for band_name in da_child_aligned.coords["band"].values:
+            for band_name in band_names:
                 da_band = da_child_aligned.sel(band=band_name)
-                if band_name.startswith("transit_count"):
+                if band_name.startswith(COUNT_METRIC_PREFIXES):
                     coarsened_band = da_band.coarsen(y=2, x=2, boundary="trim").sum()
                 else:
-                    coarsened_band = da_band.coarsen(y=2, x=2, boundary="trim").mean()
+                    weight_band_name = _matching_count_band(band_name, band_names)
+                    if weight_band_name is not None:
+                        # Coarsening a mean band by averaging already-averaged
+                        # pixels is wrong when child pixels have different
+                        # sample counts (e.g. one heavily-transited, one
+                        # barely) -- weight by the matching transit_count
+                        # band instead.
+                        weight = da_child_aligned.sel(band=weight_band_name)
+                        weighted_values = da_band * weight
+                        weighted_sum = weighted_values.coarsen(y=2, x=2, boundary="trim").sum()
+                        weight_sum = weight.coarsen(y=2, x=2, boundary="trim").sum()
+                        weight_sum_safe = weight_sum.where(weight_sum != 0)
+                        weighted_mean = weighted_sum / weight_sum_safe
+                        coarsened_band = weighted_mean.fillna(0)
+                    else:
+                        coarsened_band = da_band.coarsen(y=2, x=2, boundary="trim").mean()
                 coarsened_bands.append(coarsened_band.expand_dims(band=[band_name]))
             coarsened = xr.concat(coarsened_bands, dim="band")
         else:
@@ -343,7 +411,6 @@ def export_single_cog(nc_path, tiff_dir, var_name="counts"):
         
         # Update band descriptions using rasterio directly
         if descriptions:
-            import rasterio
             with rasterio.open(tiff_path, "r+") as dst:
                 for i, desc in enumerate(descriptions, start=1):
                     dst.set_band_description(i, desc)
@@ -362,10 +429,14 @@ def calculate_robust_max(nc_dir, zoom, var_name="counts", band=None, sample_size
         return 1.0
 
     samples = []
-    
-    import random
-    random.shuffle(ncs) 
-    
+
+    # Shuffle before truncating to a scan budget of 200 tiles below: without
+    # this, we'd always sample the same first-200-in-glob-order tiles (which
+    # tend to cluster in one corner of the tile grid by filename sort order),
+    # biasing the percentile estimate if density varies geographically. Fixed
+    # seed so the same run is reproducible.
+    random.Random(42).shuffle(ncs)
+
     # Limit number of tiles to scan
     tiles_to_scan = ncs[:min(len(ncs), 200)]
     
@@ -373,9 +444,11 @@ def calculate_robust_max(nc_dir, zoom, var_name="counts", band=None, sample_size
         try:
             with xr.open_zarr(nc) as ds:
                 da = ds[var_name]
+                # Select this band's 2D slice on the multi-band path (see the
+                # band-detection comment in run_post_processing above).
                 if band is not None and "band" in da.coords:
                     da = da.sel(band=band)
-                
+
                 # Sum extra dims
                 dims_to_sum = [d for d in da.dims if d not in ('y', 'x')]
                 if dims_to_sum:
@@ -446,22 +519,28 @@ def run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs,
         logger.info(f"Started local Dask cluster: {client.dashboard_link}")
 
     nc_dir = run_dir / "zarr"
-    
-    # Check bands
-    sample_tiles = list(nc_dir.glob(f"tile_{base_zoom}_*.zarr"))
-    if not sample_tiles:
+
+    base_zoom_tiles = list(nc_dir.glob(f"tile_{base_zoom}_*.zarr"))
+    if not base_zoom_tiles:
         logger.warning(f"No tiles found for base zoom {base_zoom}")
         return
-        
-    with xr.open_zarr(sample_tiles[0]) as ds:
-        # Detect actual variable name
-        actual_var = "metrics" if "metrics" in ds.data_vars else ("counts" if "counts" in ds.data_vars else list(ds.data_vars)[0])
-        da_sample = ds[actual_var]
-        if "band" in da_sample.coords:
-            bands = da_sample.coords["band"].values.tolist()
-        else:
-            bands = [None]
-            
+
+    # Every tile at this zoom has the same schema (same data variable name,
+    # same set of bands -- see the band naming contract at the top of this
+    # module), so just the first tile is opened to detect it; this is not a
+    # statistical sample like calculate_robust_max's tile sampling below.
+    with xr.open_zarr(base_zoom_tiles[0]) as ds:
+        # render_tile_task (renderer.py) names the saved Zarr variable
+        # "metrics" for the multi-band path, or value_column/"counts" for the
+        # single-band/category_column path -- var_name threads this detected
+        # name through every function below that needs to open a tile's Zarr
+        # dataset, since the variable name isn't fixed across configs.
+        actual_var = _detect_zarr_var_name(ds.data_vars)
+        # render_tile_task always labels the 'band' dimension with real
+        # coordinate values, even for the single-band path (e.g. ['counts']
+        # or [value_column]) -- every tile has at least one named band.
+        bands = ds[actual_var].coords["band"].values.tolist()
+
     logger.info(f"Detected bands to postprocess: {bands}")
 
     # Step 1: Run Zarr aggregation once to populate parent Zarr folders for lower zoom levels
@@ -469,7 +548,12 @@ def run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs,
 
     # Step 2: Loop over each band to calculate robust max and render PNG pyramids
     for band in bands:
-        logger.info(f"--- Processing Band: {band if band else 'Default'} ---")
+        # bands == [None] for the single-band path (no "band" coordinate
+        # labels, see the detection above) -- there's only ever one band to
+        # log in that case, so it's labeled for the log line rather than
+        # printing "None".
+        band_label = band if band else "(single unnamed band)"
+        logger.info(f"--- Processing Band: {band_label} ---")
         band_log_scale = log_scale
         band_colormap = colormap_name
         
@@ -478,15 +562,14 @@ def run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs,
             band_style = config["style"][band]
             band_colormap = band_style.get("colormap", colormap_name)
             band_log_scale = band_style.get("log_scale", log_scale)
-        elif band and band.startswith("transit_count"):
+        elif band and band.startswith(COUNT_METRIC_PREFIXES):
             band_colormap = "oslo"
             band_log_scale = True
-        elif band and band.startswith(("sog", "speed_mps")):
+        elif band and band.startswith(MEAN_METRIC_PREFIXES):
             band_colormap = "plasma"
             band_log_scale = False
 
         # Define Colormap
-        import cmcrameri.cm as crameri
         if hasattr(crameri, band_colormap):
             subset_colors = getattr(crameri, band_colormap)(np.linspace(0.2 if band_colormap == "oslo" else 0.0, 1.0, 256))
             base_cmap = mcolors.LinearSegmentedColormap.from_list("crameri_subset", subset_colors)
@@ -515,7 +598,6 @@ def run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs,
     # Step 4: Cleanup Intermediate Zarr Files
     if clean_intermediate:
         logger.info("Cleaning up intermediate Zarr files...")
-        import shutil
         for nc in nc_dir.glob("tile_*.zarr"):
             parts = nc.name.split("_")
             z = int(parts[1])

@@ -13,14 +13,24 @@ def detect_hive_partitioning(input_path: Path):
     if not input_path.is_dir():
         return None
 
+    # Walk only the partition-key directory levels (each level is exactly one
+    # "key=value" dir deep, e.g. year=/month=/day=), stopping as soon as a
+    # level has no more "key=value" children -- a dataset can have many
+    # thousands of leaf parquet files, and input_path.rglob("*") would stat
+    # every single one of them just to find the much shallower partition
+    # directories above them.
     partition_keys = {}
-    for part_dir in input_path.rglob("*"):
-        if not part_dir.is_dir() or "=" not in part_dir.name:
-            continue
-        key, value = part_dir.name.split("=", 1)
-        if not key:
-            continue
-        partition_keys.setdefault(key, set()).add(value)
+    frontier = [input_path]
+    while frontier:
+        next_frontier = []
+        for d in frontier:
+            for child in d.iterdir():
+                if child.is_dir() and "=" in child.name:
+                    key, value = child.name.split("=", 1)
+                    if key:
+                        partition_keys.setdefault(key, set()).add(value)
+                        next_frontier.append(child)
+        frontier = next_frontier
 
     # Check path and parents for partition keys
     curr = input_path
@@ -34,18 +44,19 @@ def detect_hive_partitioning(input_path: Path):
     if not partition_keys:
         return None
 
-    # Load file schema to match type exactly
+    # Load file schema to match type exactly. Only one parquet file's schema
+    # is ever needed, so stop at the first match (glob() is a lazy generator)
+    # rather than materializing every file in the dataset via list(...).
     file_schema = None
     try:
-        # Search for any parquet file in the directory or parents
-        parquet_files = list(input_path.glob("**/*.parquet")) + list(input_path.glob("*.parquet"))
-        if not parquet_files:
+        first_parquet = next(input_path.glob("**/*.parquet"), None)
+        if first_parquet is None:
             for parent in input_path.parents:
-                parquet_files = list(parent.glob("*.parquet"))
-                if parquet_files:
+                first_parquet = next(parent.glob("*.parquet"), None)
+                if first_parquet is not None:
                     break
-        if parquet_files:
-            file_schema = pq.read_metadata(parquet_files[0]).schema.to_arrow_schema()
+        if first_parquet is not None:
+            file_schema = pq.read_metadata(first_parquet).schema.to_arrow_schema()
     except Exception:
         logger.warning(
             f"Could not read Parquet schema near {input_path}; falling back to "

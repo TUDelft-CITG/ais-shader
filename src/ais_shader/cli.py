@@ -1,10 +1,20 @@
 import logging
 import sys
 import warnings
-warnings.filterwarnings("ignore")
+# Suppress specific, known-noisy warnings that don't indicate real problems
+# for CLI users -- pandas/dask FutureWarnings about upcoming default changes
+# this project doesn't control, and zarr's informational notices about its
+# own format-spec status -- rather than blanket-suppressing every warning
+# category (which would also hide genuine issues like RuntimeWarning for
+# invalid numeric operations).
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=".*[Cc]onsolidated metadata.*")
 from pathlib import Path
 import click
+import dask_geopandas
+import pandas as pd
 import tomllib
+from dask.distributed import Client
 
 # Import from src modules
 from .renderer import run_rendering
@@ -12,6 +22,7 @@ from .postprocessing import run_post_processing
 from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_csv_conversion, run_linestring_generation, run_segment_generation, run_outlier_filtering, normalize_to_epoch
 from .analysis import run_passage_analysis
 from .data_loader import detect_hive_partitioning
+from .moving_dask.trajectory import trajectorize_dataframe
 
 # Configure logging
 logging.basicConfig(
@@ -406,11 +417,7 @@ def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, sche
     Voyage segmentation and feature engineering on Dask.
     """
     output_file = output_file or _default_output_path(input_file, "-trajectorized.geoparquet")
-    import dask_geopandas
-    from dask.distributed import Client
-    import pandas as pd
-    from .moving_dask.trajectory import trajectorize_dataframe
-    
+
     if scheduler:
         client = Client(scheduler)
     else:
@@ -516,12 +523,23 @@ def to_linestring(input_file, output_file, vessel_codes_json):
     default=None,
     help="Path to JSON mapping file for vessel type classification.",
 )
-def to_segment(input_file, output_file, epoch_time, vessel_codes_json):
+@click.option(
+    "--sog-raw-units/--sog-knots",
+    "sog_raw_units",
+    default=False,
+    help="Whether the source 'sog' column is still in raw AIS units (0.1-knot "
+         "steps, 0-1022, 1023='not available' -- needs /10) or already "
+         "rescaled to knots (0.0-102.2, the default). Confirm from the "
+         "source data rather than guessing. A warning is logged if the "
+         "chosen setting looks implausible given the data, but it is not "
+         "auto-corrected.",
+)
+def to_segment(input_file, output_file, epoch_time, vessel_codes_json, sog_raw_units):
     """
     Generate point-pair line segments from trajectorized point trajectories.
     """
     output_file = output_file or _default_output_path(input_file, "-segments.geoparquet")
-    run_segment_generation(input_file, output_file, epoch_time, vessel_codes_json)
+    run_segment_generation(input_file, output_file, sog_raw_units, epoch_time, vessel_codes_json)
 
 
 # Register trajectory commands

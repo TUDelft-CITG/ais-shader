@@ -105,6 +105,32 @@ This section documents the file formats and schemas consumed and produced by the
   - CRS: EPSG:3857
   - Transform: Affine transform matching the Web Mercator tile boundaries.
 
+### 2b. Band Naming Contract
+
+The `band` coordinate on Zarr/COG output follows a fixed naming convention that
+`postprocessing.py` relies on for pyramid coarsening (sum vs. count-weighted
+mean) and default colormap/log-scale selection, and that `renderer.py`
+produces:
+
+- A **total** metric band is named exactly after the metric: `transit_count`,
+  `sog`, or `speed_mps`.
+- A **per-category breakdown** band -- produced only when the config sets
+  `category_column` (e.g. `VesselGroup`) -- is named `{metric}__{category}`,
+  e.g. `transit_count__Cargo`, `sog__Tanker`. `/` in a category name is
+  replaced with `-` (band names double as PNG subdirectory names and COG band
+  descriptions, so `/` would be read as a path separator).
+
+Consumers match on the `{metric}` prefix (before `__`), not the full band
+name, so a new category automatically gets correct treatment without any
+code change. `transit_count`-prefixed bands are summed when coarsening to a
+lower zoom level (density is additive); every other band is a per-pixel mean
+and is coarsened as a count-weighted mean, using its matching
+`transit_count`-prefixed sibling band as the weight (`sog__Cargo` is weighted
+by `transit_count__Cargo`, not by the unrelated all-traffic total). A band
+that doesn't match this contract (custom `value_column`/`aggregation` config,
+for instance) falls back to an unweighted mean and default styling -- not an
+error, just less correct/pretty.
+
 ### 3. Visualized PNG Tiles
 - **Format**: 4-channel `RGBA` Portable Network Graphics.
 - **Directory Structure**: `rendered/run_YYYYMMDD_HHMMSS/png/{zoom}/{x}/{y}.png`

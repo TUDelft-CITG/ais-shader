@@ -45,8 +45,18 @@ where = ["src"]
 [tool.uv]
 package = true
 
+[tool.uv.sources]
+datashader = { git = "https://github.com/SiggyF/datashader", branch = "fix-geopandas-line-invariance" }
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
     "psutil",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    # zarr's own informational notice about its format-spec status, not
+    # something this project's code can avoid while using consolidated=True.
+    "ignore:.*[Cc]onsolidated metadata.*:UserWarning",
 ]
