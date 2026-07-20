@@ -2,12 +2,14 @@ import logging
 import time
 import os
 import threading
+from pathlib import Path
 import psutil
 import pandas as pd
 import dask.dataframe as dd
 from dask.distributed import Client
 import mlflow
 
+from ais_shader.data_loader import detect_hive_partitioning
 from ais_shader.moving_dask.trajectory import trajectorize_dataframe
 
 logger = logging.getLogger(__name__)
@@ -166,7 +168,11 @@ def run_benchmark_suite(
     try:
         # Load sample data
         logger.info(f"Loading dataset: {dataset_path}...")
-        ddf = dd.read_parquet(dataset_path)
+        read_kwargs = {}
+        partitioning = detect_hive_partitioning(Path(dataset_path))
+        if partitioning is not None:
+            read_kwargs["dataset"] = {"partitioning": partitioning}
+        ddf = dd.read_parquet(dataset_path, **read_kwargs)
         if ddf.npartitions < 32:
             logger.info(f"Dataset has only {ddf.npartitions} partitions. Repartitioning to 32 partitions to enable cluster parallelization...")
             ddf = ddf.repartition(npartitions=32)

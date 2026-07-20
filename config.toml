@@ -6,7 +6,7 @@ zoom = 10
 tile_size = 1024
 line_width = 1
 category_column = "VesselGroup" # Column to group counts by
-bbox = [-174.0, 11.0, -60.0, 51.5]  # Full extent calculated from dataing Box (EPSG:4326): MinX, MinY, MaxX, MaxY
+bbox = [-174.0, 11.0, -60.0, 51.5]  # Full extent calculated from data's Bounding Box (EPSG:4326): MinX, MinY, MaxX, MaxY; not auto-computed from the dataset
 batch_size = 20
 
 [resources]

@@ -40,17 +40,15 @@ def create_transparent_cmap(base_cmap_name="viridis", min_alpha=0.0, max_alpha=1
     
     return mcolors.ListedColormap(colors)
 
-def render_tile(nc_path, output_path, cmap, global_max, log_scale=True):
+def render_tile(nc_path, output_path, cmap, global_max, var_name="counts", band=None, log_scale=True):
     """
     Render a single NetCDF to PNG using global scaling and custom colormap.
     """
     # Open Zarr
     with xr.open_zarr(nc_path) as ds:
-        if "counts" not in ds.data_vars:
-            raise KeyError(f"'counts' data variable not found in Zarr dataset: {nc_path}")
-        var_name = "counts"
-
         da = ds[var_name]
+        if band is not None and "band" in da.coords:
+            da = da.sel(band=band)
         
         # Sum over extra dimensions to get 2D (y, x) for visualization
         dims_to_sum = [d for d in da.dims if d not in ('y', 'x')]
@@ -89,12 +87,14 @@ def render_tile(nc_path, output_path, cmap, global_max, log_scale=True):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_path)
 
-def process_zoom_level(run_dir, zoom, cmap, global_max, client):
+def process_zoom_level(run_dir, zoom, cmap, global_max, client, var_name="counts", band=None, log_scale=True):
     """
     Process all NetCDFs for a specific zoom level.
     """
     nc_dir = run_dir / "zarr"
     png_dir = run_dir / "png"
+    if band:
+        png_dir = png_dir / band
     
     ncs = list(nc_dir.glob(f"tile_{zoom}_*.zarr"))
     logger.info(f"Found {len(ncs)} tiles for Zoom {zoom}")
@@ -108,23 +108,19 @@ def process_zoom_level(run_dir, zoom, cmap, global_max, client):
         parts = nc.stem.split("_")
         x, y = parts[2], parts[3]
         png_path = png_dir / str(zoom) / x / f"{y}.png"
-        futures.append(client.submit(render_tile, nc, png_path, cmap, global_max))
+        futures.append(client.submit(render_tile, nc, png_path, cmap, global_max, var_name=var_name, band=band, log_scale=log_scale))
     
     for _ in tqdm(as_completed(futures), total=len(futures), desc=f"Rendering Zoom {zoom}"):
         pass
 
-def generate_pyramid(run_dir, base_zoom, cmap, client):
+def aggregate_pyramid(run_dir, base_zoom, client, var_name="counts"):
     """
-    Generate lower zoom levels by aggregating upper levels.
+    Aggregate Zarr tiles sequentially down the zoom levels (down to Zoom 0).
     """
     nc_dir = run_dir / "zarr"
-    
-    # Iterate from base_zoom - 1 down to 0 (must be sequential)
     for z in range(base_zoom - 1, -1, -1):
-        logger.info(f"Generating Zoom {z}...")
-        
+        logger.info(f"Aggregating Zoom {z}...")
         child_ncs = list(nc_dir.glob(f"tile_{z+1}_*.zarr"))
-        
         parents = defaultdict(list)
         for child in child_ncs:
             parts = child.stem.split("_")
@@ -135,34 +131,39 @@ def generate_pyramid(run_dir, base_zoom, cmap, client):
             
         logger.info(f"Zoom {z}: Found {len(child_ncs)} child tiles, grouped into {len(parents)} parent tiles.")
             
-        # Step 1: Aggregate & Save Zarr
         futures = []
         for parent_key, children in parents.items():
-            futures.append(client.submit(aggregate_and_save_parent_tile, parent_key, children, nc_dir))
+            futures.append(client.submit(aggregate_and_save_parent_tile, parent_key, children, nc_dir, var_name=var_name))
         
-        # Wait for all aggregations to finish
-        parent_ncs = []
         for f in tqdm(as_completed(futures), total=len(futures), desc=f"Aggregating Zoom {z}"):
-            res = f.result()
-            if res:
-                parent_ncs.append(res)
-                
-        # Step 2: Calculate Robust Max for this level
-        level_max = calculate_robust_max(nc_dir, z)
+            f.result()
+
+def render_pyramid_pngs(run_dir, base_zoom, cmap, client, var_name="counts", band=None, log_scale=True):
+    """
+    Render PNG tiles for all aggregated lower zoom levels down to Zoom 0.
+    """
+    nc_dir = run_dir / "zarr"
+    png_dir = run_dir / "png"
+    if band:
+        png_dir = png_dir / band
+
+    for z in range(base_zoom - 1, -1, -1):
+        logger.info(f"Rendering lower zoom PNGs for Zoom {z}...")
+        parent_ncs = list(nc_dir.glob(f"tile_{z}_*.zarr"))
         
-        # Step 3: Render PNGs
+        level_max = calculate_robust_max(nc_dir, z, var_name=var_name, band=band)
+        
         render_futures = []
-        png_dir = run_dir / "png"
         for nc in parent_ncs:
             parts = nc.stem.split("_")
             px, py = parts[2], parts[3]
             png_path = png_dir / str(z) / px / f"{py}.png"
-            render_futures.append(client.submit(render_tile, nc, png_path, cmap, level_max))
+            render_futures.append(client.submit(render_tile, nc, png_path, cmap, level_max, var_name=var_name, band=band, log_scale=log_scale))
             
         for _ in tqdm(as_completed(render_futures), total=len(render_futures), desc=f"Rendering Zoom {z}"):
             pass
 
-def export_cogs(run_dir, base_zoom, client):
+def export_cogs(run_dir, base_zoom, client, var_name="counts"):
     """
     Convert NetCDF tiles at base_zoom to Cloud Optimized GeoTIFFs.
     """
@@ -173,11 +174,11 @@ def export_cogs(run_dir, base_zoom, client):
     ncs = list(nc_dir.glob(f"tile_{base_zoom}_*.zarr"))
     logger.info(f"Exporting {len(ncs)} COGs for Zoom {base_zoom}...")
     
-    futures = [client.submit(export_single_cog, nc, tiff_dir) for nc in ncs]
+    futures = [client.submit(export_single_cog, nc, tiff_dir, var_name=var_name) for nc in ncs]
     for _ in tqdm(as_completed(futures), total=len(futures), desc="Exporting COGs"):
         pass
 
-def aggregate_children(parent_key, children):
+def aggregate_children(parent_key, children, var_name="counts"):
     """
     Aggregate child NetCDF files into a single parent DataArray.
     """
@@ -187,9 +188,7 @@ def aggregate_children(parent_key, children):
     
     for child_path in children:
         with xr.open_zarr(child_path) as ds:
-            if "counts" not in ds.data_vars:
-                raise KeyError(f"'counts' data variable not found in Zarr dataset: {child_path}")
-            da = ds["counts"]
+            da = ds[var_name]
 
             # Load data into memory to avoid file handle issues during aggregation
             da.load()
@@ -247,7 +246,18 @@ def aggregate_children(parent_key, children):
         else:
             da_child_aligned = da_child
         
-        coarsened = da_child_aligned.coarsen(y=2, x=2, boundary="trim").sum()
+        if "band" in da_child_aligned.coords:
+            coarsened_bands = []
+            for band_name in da_child_aligned.coords["band"].values:
+                da_band = da_child_aligned.sel(band=band_name)
+                if band_name.startswith("transit_count"):
+                    coarsened_band = da_band.coarsen(y=2, x=2, boundary="trim").sum()
+                else:
+                    coarsened_band = da_band.coarsen(y=2, x=2, boundary="trim").mean()
+                coarsened_bands.append(coarsened_band.expand_dims(band=[band_name]))
+            coarsened = xr.concat(coarsened_bands, dim="band")
+        else:
+            coarsened = da_child_aligned.coarsen(y=2, x=2, boundary="trim").sum()
         
         np_slices = []
         for d in parent_dims:
@@ -258,46 +268,45 @@ def aggregate_children(parent_key, children):
         parent_data[tuple(np_slices)] = coarsened.values
 
     da_parent = xr.DataArray(parent_data, dims=parent_dims, coords=parent_coords)
-    da_parent.name = "counts"
+    da_parent.name = var_name
     return da_parent
 
 def save_zarr(da, path):
     """
     Save DataArray to Zarr with compression.
     """
-    da = da.astype("int32")
     da.to_zarr(path, mode="w", consolidated=True)
     logger.info(f"Saved parent Zarr: {path}")
 
-def aggregate_and_save_parent_tile(parent_key, children, nc_dir):
+def aggregate_and_save_parent_tile(parent_key, children, nc_dir, var_name="counts"):
     """
     Process a single parent tile: aggregate children and save Zarr.
     Returns path to saved Zarr or None.
     """
     z, px, py = parent_key
+    parent_nc_path = nc_dir / f"tile_{z}_{px}_{py}.zarr"
+    if parent_nc_path.exists():
+        # Already aggregated by a previous pass
+        return parent_nc_path
+        
     # logger.debug(f"Processing parent {parent_key} with {len(children)} children")
     
     # 1. Aggregate
-    da_parent = aggregate_children(parent_key, children)
+    da_parent = aggregate_children(parent_key, children, var_name=var_name)
     if da_parent is None:
         logger.warning(f"No children processed for parent {parent_key}")
         return None
 
     # 2. Save Zarr
-    parent_nc_path = nc_dir / f"tile_{z}_{px}_{py}.zarr"
     save_zarr(da_parent, parent_nc_path)
     
     return parent_nc_path
-
-def export_single_cog(nc_path, tiff_dir):
+    
+def export_single_cog(nc_path, tiff_dir, var_name="counts"):
     """
     Convert a single NetCDF tile to COG.
     """
     with xr.open_zarr(nc_path) as ds:
-        if "counts" not in ds.data_vars:
-            raise KeyError(f"'counts' data variable not found in Zarr dataset: {nc_path}")
-        var_name = "counts"
-
         da = ds[var_name]
         
         # Prepare for GeoTIFF: needs (band, y, x)
@@ -341,7 +350,7 @@ def export_single_cog(nc_path, tiff_dir):
         
         return tiff_path
 
-def calculate_robust_max(nc_dir, zoom, sample_size=1_000_000):
+def calculate_robust_max(nc_dir, zoom, var_name="counts", band=None, sample_size=1_000_000):
     """
     Calculate 98th percentile of non-zero values for a specific zoom level.
     """
@@ -363,11 +372,9 @@ def calculate_robust_max(nc_dir, zoom, sample_size=1_000_000):
     for nc in tqdm(tiles_to_scan, desc=f"Sampling Zoom {zoom}"):
         try:
             with xr.open_zarr(nc) as ds:
-                if "counts" not in ds.data_vars:
-                    raise KeyError(f"'counts' data variable not found in Zarr dataset: {nc}")
-                var_name = "counts"
-
                 da = ds[var_name]
+                if band is not None and "band" in da.coords:
+                    da = da.sel(band=band)
                 
                 # Sum extra dims
                 dims_to_sum = [d for d in da.dims if d not in ('y', 'x')]
@@ -405,6 +412,11 @@ def run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs,
         "distributed.scheduler.allowed-failures": 0,
     }
 
+    log_scale = True
+    colormap_name = "oslo"
+    var_name = "counts"
+    config = {}
+
     # Load Config for resources if available
     if config_file.exists():
         with open(config_file, "rb") as f:
@@ -417,6 +429,13 @@ def run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs,
             if "memory_pause" in res: dask_config["distributed.worker.memory.pause"] = res["memory_pause"]
             dask_config["distributed.worker.memory.terminate"] = False
 
+        if "visualization" in config:
+            log_scale = config["visualization"].get("log_scale", True)
+            value_column = config["visualization"].get("value_column", "counts")
+            var_name = value_column if value_column else "counts"
+        if "style" in config:
+            colormap_name = config["style"].get("colormap", "oslo")
+
     dask.config.set(dask_config)
     
     if scheduler:
@@ -428,39 +447,75 @@ def run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs,
 
     nc_dir = run_dir / "zarr"
     
-    # 1. Calculate Robust Max (98th Percentile) for Base Zoom
-    global_max = calculate_robust_max(nc_dir, base_zoom)
+    # Check bands
+    sample_tiles = list(nc_dir.glob(f"tile_{base_zoom}_*.zarr"))
+    if not sample_tiles:
+        logger.warning(f"No tiles found for base zoom {base_zoom}")
+        return
+        
+    with xr.open_zarr(sample_tiles[0]) as ds:
+        # Detect actual variable name
+        actual_var = "metrics" if "metrics" in ds.data_vars else ("counts" if "counts" in ds.data_vars else list(ds.data_vars)[0])
+        da_sample = ds[actual_var]
+        if "band" in da_sample.coords:
+            bands = da_sample.coords["band"].values.tolist()
+        else:
+            bands = [None]
+            
+    logger.info(f"Detected bands to postprocess: {bands}")
 
-    # 2. Define Colormap (Crameri Oslo, L=20% start)
-    # oslo goes Black -> Blue -> White
-    # Start at L=20 (approx 20% of 256 = 51)
-    subset_colors = crameri.oslo(np.linspace(0.2, 1.0, 256))
-    base_cmap = mcolors.LinearSegmentedColormap.from_list("crameri_oslo_subset", subset_colors)
-    
-    # Apply alpha gradient
-    n_colors = 256
-    colors_array = base_cmap(np.linspace(0, 1, n_colors))
-    alphas = np.linspace(0.2, 1.0, n_colors) # min_alpha=0.2
-    colors_array[:, 3] = alphas
-    cmap = mcolors.ListedColormap(colors_array)
-    logger.info("Using Crameri Oslo colormap (L=20% start)")
+    # Step 1: Run Zarr aggregation once to populate parent Zarr folders for lower zoom levels
+    aggregate_pyramid(run_dir, base_zoom, client, var_name=actual_var)
 
-    # 3. Render Base Zoom
-    process_zoom_level(run_dir, base_zoom, cmap, global_max, client)
-    
-    # 4. Generate Pyramid
-    generate_pyramid(run_dir, base_zoom, cmap, client)
-    
-    # 5. Export COGs
+    # Step 2: Loop over each band to calculate robust max and render PNG pyramids
+    for band in bands:
+        logger.info(f"--- Processing Band: {band if band else 'Default'} ---")
+        band_log_scale = log_scale
+        band_colormap = colormap_name
+        
+        # Read style configuration for this specific band if specified
+        if band and "style" in config and band in config["style"]:
+            band_style = config["style"][band]
+            band_colormap = band_style.get("colormap", colormap_name)
+            band_log_scale = band_style.get("log_scale", log_scale)
+        elif band and band.startswith("transit_count"):
+            band_colormap = "oslo"
+            band_log_scale = True
+        elif band and band.startswith(("sog", "speed_mps")):
+            band_colormap = "plasma"
+            band_log_scale = False
+
+        # Define Colormap
+        import cmcrameri.cm as crameri
+        if hasattr(crameri, band_colormap):
+            subset_colors = getattr(crameri, band_colormap)(np.linspace(0.2 if band_colormap == "oslo" else 0.0, 1.0, 256))
+            base_cmap = mcolors.LinearSegmentedColormap.from_list("crameri_subset", subset_colors)
+        else:
+            base_cmap = plt.get_cmap(band_colormap)
+        
+        n_colors = 256
+        colors_array = base_cmap(np.linspace(0, 1, n_colors))
+        min_alpha = 0.0 if band_colormap != "oslo" else 0.2
+        alphas = np.linspace(min_alpha, 1.0, n_colors)
+        colors_array[:, 3] = alphas
+        cmap = mcolors.ListedColormap(colors_array)
+        logger.info(f"Band {band}: colormap={band_colormap}, log_scale={band_log_scale}")
+
+        # Render Base Zoom PNGs
+        global_max = calculate_robust_max(nc_dir, base_zoom, var_name=actual_var, band=band)
+        process_zoom_level(run_dir, base_zoom, cmap, global_max, client, var_name=actual_var, band=band, log_scale=band_log_scale)
+        
+        # Render lower zooms PNGs
+        render_pyramid_pngs(run_dir, base_zoom, cmap, client, var_name=actual_var, band=band, log_scale=band_log_scale)
+
+    # Step 3: Export multi-band COGs
     if cogs:
-        export_cogs(run_dir, base_zoom, client)
+        export_cogs(run_dir, base_zoom, client, var_name=actual_var)
 
-    # 6. Cleanup Intermediate Files
+    # Step 4: Cleanup Intermediate Zarr Files
     if clean_intermediate:
         logger.info("Cleaning up intermediate Zarr files...")
         import shutil
-
-        # Delete all .zarr files where zoom < base_zoom
         for nc in nc_dir.glob("tile_*.zarr"):
             parts = nc.name.split("_")
             z = int(parts[1])

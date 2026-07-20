@@ -36,7 +36,13 @@ def calculate_kinematic_features_pandas(
     lats = df[y_col].values
     
     # Geod.inv expects arrays of lon1, lat1, lon2, lat2
-    _, _, dists = geod.inv(lons[:-1], lats[:-1], lons[1:], lats[1:])
+    lon1, lat1 = lons[:-1], lats[:-1]
+    lon2, lat2 = lons[1:], lats[1:]
+    if len(lon1) == 1:
+        _, _, dists = geod.inv(float(lon1[0]), float(lat1[0]), float(lon2[0]), float(lat2[0]))
+        dists = np.array([dists])
+    else:
+        _, _, dists = geod.inv(lon1, lat1, lon2, lat2)
     # Insert NaN at start to align with DataFrame index
     distances_m = np.insert(dists, 0, np.nan)
 
