@@ -10,7 +10,6 @@ import json
 import geopandas as gpd
 import pandas as pd
 import pytest
-import shapely
 
 from ais_shader.preprocessing import build_vessel_mapping, run_segment_generation
 

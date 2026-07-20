@@ -9,7 +9,6 @@ did not.
 """
 import geopandas as gpd
 import pandas as pd
-import shapely
 import pytest
 
 from ais_shader.preprocessing import run_outlier_filtering, strip_tz_and_epoch_seconds
