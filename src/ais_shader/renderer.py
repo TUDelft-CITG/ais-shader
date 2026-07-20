@@ -27,16 +27,17 @@ logger = logging.getLogger(__name__)
 # Pixel margin rendered beyond each tile's true edge, then cropped away after
 # aggregation, so that line segments continuing into a neighboring tile aren't
 # wrongly end-capped at this tile's boundary. Must be at least as large as the
-# longest on-canvas pixel footprint a segment can have near the boundary; 8px
-# comfortably covers the AIS segment lengths seen in practice for this zoom
-# level (see tests/test_tile_edge_lines.py). render_tile_task's own pre-clip
-# box must match this exactly (not a wider margin): a geometry that survives
-# a wider pre-clip but lies entirely outside the canvas's own x_range/y_range
-# crashes datashader's cvs.line(), which doesn't handle all-out-of-range input
-# gracefully. CLIP_MARGIN_PX only pads the coarser, non-crashing .cx[]
-# spatial prefetch in render_tiles(), so it can never exclude data the render
-# border needs.
-TILE_BORDER_PX = 8
+# longest on-canvas pixel footprint a segment can have near the boundary: 32px
+# covers the synthetic 20px-reaching test lines in tests/test_tile_edge_lines.py
+# with margin for the antialiasing kernel's own small spread, and is a
+# negligible per-tile compute cost (a ~6% wider canvas at tile_size=1024).
+# render_tile_task's own pre-clip box must match this exactly (not a wider
+# margin): a geometry that survives a wider pre-clip but lies entirely
+# outside the canvas's own x_range/y_range crashes datashader's cvs.line(),
+# which doesn't handle all-out-of-range input gracefully. CLIP_MARGIN_PX only
+# pads the coarser, non-crashing .cx[] spatial prefetch in render_tiles(), so
+# it can never exclude data the render border needs.
+TILE_BORDER_PX = 32
 CLIP_MARGIN_PX = 2
 
 
@@ -76,12 +77,12 @@ def _reduction_for_band(band):
 
 
 def _line_kwargs_for_band(band, line_width):
-    """kwargs for cvs.line() matching the pre-existing per-band behavior: only
-    transit_count has ever respected line_width, and only when non-zero (zero
-    omits the argument entirely rather than passing 0, since datashader picks
-    aliased vs. antialiased line rendering based on the argument's presence,
-    not its value)."""
-    if band == "transit_count" and line_width != 0:
+    """kwargs for cvs.line(), applied consistently across every band so all
+    bands of the same tile share the same rendered line footprint. line_width
+    is omitted entirely (rather than passed as 0) when zero, since datashader
+    picks aliased vs. antialiased line rendering based on the argument's
+    presence, not its value."""
+    if line_width != 0:
         return {"line_width": line_width}
     return {}
 
@@ -176,20 +177,22 @@ def render_tile_task(gdf_local, tile, zarr_dir, config):
             line_kwargs = _line_kwargs_for_band(b, line_width)
 
             agg_band = cvs.line(gdf_local, geometry='geometry', agg=reduction, **line_kwargs)
-            da_band = agg_band.fillna(0).astype("float32").expand_dims(dim={'band': [b]})
+            agg_band = agg_band.fillna(0)
+            agg_band = agg_band.astype("float32")
+            da_band = agg_band.expand_dims(dim={'band': [b]})
             da_list.append(da_band)
 
             if category_column and categories:
                 agg_cat = cvs.line(
                     gdf_local, geometry='geometry', agg=ds.by(category_column, reduction), **line_kwargs
                 )
-                agg_cat = agg_cat.fillna(0).astype("float32")
+                agg_cat = agg_cat.fillna(0)
+                agg_cat = agg_cat.astype("float32")
                 for cat in categories:
-                    da_cat = (
-                        agg_cat.sel({category_column: cat})
-                        .drop_vars(category_column)
-                        .expand_dims(dim={'band': [f"{b}__{_sanitize_band_name(cat)}"]})
-                    )
+                    cat_band_name = f"{b}__{_sanitize_band_name(cat)}"
+                    da_cat = agg_cat.sel({category_column: cat})
+                    da_cat = da_cat.drop_vars(category_column)
+                    da_cat = da_cat.expand_dims(dim={'band': [cat_band_name]})
                     da_list.append(da_cat)
 
         da = xr.concat(da_list, dim='band')
@@ -199,29 +202,41 @@ def render_tile_task(gdf_local, tile, zarr_dir, config):
         value_column = config["visualization"].get("value_column")
         aggregation_type = config["visualization"].get("aggregation", "count")
 
+        # line_width is applied consistently across every aggregation type
+        # below, matching _line_kwargs_for_band's behavior in the bands path.
+        line_kwargs = {"line_width": line_width} if line_width != 0 else {}
+
         if category_column:
             gdf_local[category_column] = gdf_local[category_column].astype("category")
-            agg = cvs.line(gdf_local, geometry='geometry', agg=ds.by(category_column, ds.count()))
+            agg = cvs.line(gdf_local, geometry='geometry', agg=ds.by(category_column, ds.count()), **line_kwargs)
             # ds.by returns a DataArray with an extra category dimension (not a
             # Dataset), so rename it to 'band' directly rather than the old
             # isinstance(agg, xr.Dataset) branch, which datashader's current
             # ds.by output never actually takes.
-            da = agg.fillna(0).astype("int32").rename({category_column: "band"})
-            da = da.assign_coords(band=[_sanitize_band_name(c) for c in da["band"].values])
+            da = agg.fillna(0)
+            da = da.astype("int32")
+            da = da.rename({category_column: "band"})
+            sanitized_band_names = [_sanitize_band_name(c) for c in da["band"].values]
+            da = da.assign_coords(band=sanitized_band_names)
         elif value_column:
             if aggregation_type == "mean":
-                agg = cvs.line(gdf_local, geometry='geometry', agg=ds.mean(value_column))
+                agg = cvs.line(gdf_local, geometry='geometry', agg=ds.mean(value_column), **line_kwargs)
             elif aggregation_type == "max":
-                agg = cvs.line(gdf_local, geometry='geometry', agg=ds.max(value_column))
+                agg = cvs.line(gdf_local, geometry='geometry', agg=ds.max(value_column), **line_kwargs)
             else:
                 raise ValueError(f"Unsupported aggregation: {aggregation_type}")
-            da = agg.fillna(0).astype("float32").expand_dims(dim={'band': 1})
+            da = agg.fillna(0)
+            da = da.astype("float32")
+            # Always give the 'band' dimension a real coordinate label (not
+            # just a bare size-1 dim) -- we control every code path that
+            # produces this output, so there's no reason for postprocessing.py
+            # to have to handle a "band dim with no band coordinate" case.
+            da = da.expand_dims(dim={'band': [value_column]})
         else:
-            if line_width == 0:
-                agg = cvs.line(gdf_local, geometry='geometry', agg=ds.count())
-            else:
-                agg = cvs.line(gdf_local, geometry='geometry', agg=ds.count(), line_width=line_width)
-            da = agg.fillna(0).astype("int32").expand_dims(dim={'band': 1})
+            agg = cvs.line(gdf_local, geometry='geometry', agg=ds.count(), **line_kwargs)
+            da = agg.fillna(0)
+            da = da.astype("int32")
+            da = da.expand_dims(dim={'band': ['counts']})
         da.name = value_column or "counts"
 
     # Crop to the original tile size (discarding the border)
@@ -238,7 +253,7 @@ def render_tile_task(gdf_local, tile, zarr_dir, config):
     zarr_path = zarr_dir / f"tile_{tile.z}_{tile.x}_{tile.y}.zarr"
     
     # Encoding: disable compression for spatial_ref
-    encoding = {"spatial_ref": {"compressor": None}}
+    encoding = {"spatial_ref": {"compressors": None}}
     
     da.to_zarr(zarr_path, mode="w", consolidated=True, encoding=encoding)
     

@@ -1,11 +1,15 @@
+import json
 import logging
 from pathlib import Path
+import dask.bag as db
 import dask.dataframe as dd
 import dask_geopandas
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import shapely
 from dask.distributed import Client
+from shapely.geometry import LineString
 from .data_loader import detect_hive_partitioning
 from .moving_dask.trajectory import filter_speed_outliers, DEFAULT_OUTLIER_V_MAX, DEFAULT_OUTLIER_D_MIN
 
@@ -20,46 +24,70 @@ def convert_to_gdf(df: pd.DataFrame) -> gpd.GeoDataFrame:
     gdf = gpd.GeoDataFrame(df_copy, geometry=gs, crs="EPSG:4269")
     return gdf
 
+VESSEL_CODE_RANGE_SEPARATOR = " to "
+"""Range syntax accepted for a 'vessel_code' string in the vessel-codes JSON,
+e.g. "70 to 79" -- expanded to individual int keys 70, 71, ..., 79. Any string
+containing this separator is parsed as a range and must be exactly two
+"start to end" numbers; any other string is treated as a plain string-label
+key (see build_vessel_mapping)."""
+
+
 def build_vessel_mapping(vessel_codes_json: Path = None) -> dict:
     """
     Build a {AIS ship type code or label: vessel group name} mapping from an
-    optional JSON file (list of {"vessel_code": ..., "vessel_group": ...}).
+    optional JSON file: a list of {"vessel_code": ..., "vessel_group": ...}
+    entries, where vessel_code is exactly one of:
+      - a numeric AIS code, e.g. 80 (int or float-as-string)
+      - a numeric range using VESSEL_CODE_RANGE_SEPARATOR, e.g. "70 to 79"
+        (expanded to individual int keys)
+      - a string label, e.g. "Tanker" (for datasets like the Danish AIS
+        Denmark open data whose 'Ship type' column is already decoded to a
+        string rather than a numeric code) -- stored as a lowercased string
+        key
 
-    vessel_code may be a numeric AIS code (e.g. 80), a "X to Y" numeric range
-    (expanded to individual int keys), or a string label (e.g. "Tanker", for
-    datasets like the Danish AIS Denmark open data whose 'Ship type' column is
-    already decoded to a string rather than a numeric code) -- stored as a
-    lowercased string key.
+    Any entry that doesn't meet this format raises immediately -- a
+    vessel-codes file the caller explicitly supplied is expected to be
+    well-formed, so a malformed entry is a configuration error to surface,
+    not something to skip past silently.
     """
     vessel_mapping = {}
-    if vessel_codes_json and Path(vessel_codes_json).exists():
-        import json
+    if not vessel_codes_json:
+        return vessel_mapping
+
+    vessel_codes_json = Path(vessel_codes_json)
+    if not vessel_codes_json.exists():
+        raise FileNotFoundError(f"Vessel codes JSON file not found: {vessel_codes_json}")
+
+    logger.info(f"Loading vessel codes mapping from: {vessel_codes_json}...")
+    with open(vessel_codes_json, "r") as f:
+        data = json.load(f)
+
+    for item in data:
+        code = item.get("vessel_code")
+        group = item.get("vessel_group")
+        if code is None or group is None:
+            raise ValueError(f"Malformed vessel code entry (needs 'vessel_code' and 'vessel_group'): {item}")
+
         try:
-            logger.info(f"Loading vessel codes mapping from: {vessel_codes_json}...")
-            with open(vessel_codes_json, "r") as f:
-                data = json.load(f)
-                for item in data:
-                    code = item.get("vessel_code")
-                    group = item.get("vessel_group")
-                    if code is None or group is None:
-                        continue
-                    try:
-                        vessel_mapping[int(float(code))] = group
-                    except (ValueError, TypeError):
-                        if isinstance(code, str) and " to " in code:
-                            parts = code.split(" to ")
-                            if len(parts) == 2:
-                                try:
-                                    start = int(float(parts[0]))
-                                    end = int(float(parts[1]))
-                                    for c in range(start, end + 1):
-                                        vessel_mapping[c] = group
-                                except Exception:
-                                    pass
-                        elif isinstance(code, str):
-                            vessel_mapping[code.strip().lower()] = group
-        except Exception as e:
-            logger.warning(f"Failed to load vessel codes JSON: {e}")
+            vessel_mapping[int(float(code))] = group
+            continue
+        except (ValueError, TypeError):
+            pass
+
+        if isinstance(code, str) and VESSEL_CODE_RANGE_SEPARATOR in code:
+            parts = code.split(VESSEL_CODE_RANGE_SEPARATOR)
+            if len(parts) != 2:
+                raise ValueError(
+                    f"'vessel_code' range must be exactly 'start{VESSEL_CODE_RANGE_SEPARATOR}end': {code!r}"
+                )
+            start, end = int(float(parts[0])), int(float(parts[1]))
+            for c in range(start, end + 1):
+                vessel_mapping[c] = group
+        elif isinstance(code, str):
+            vessel_mapping[code.strip().lower()] = group
+        else:
+            raise ValueError(f"Unrecognized 'vessel_code' format: {code!r}")
+
     return vessel_mapping
 
 def get_vessel_group(shiptype, vessel_mapping: dict) -> str:
@@ -99,6 +127,78 @@ def get_vessel_group(shiptype, vessel_mapping: dict) -> str:
         return "Tanker"
     else:
         return "Other"
+
+SOG_NOT_AVAILABLE_KNOTS = 102.3
+SOG_CAP_KNOTS = 102.2
+
+
+def clean_sog(sog_raw, raw_units: bool) -> np.ndarray:
+    """
+    Clean an AIS SOG (speed over ground) column.
+
+    `raw_units` must be supplied explicitly by the caller (config/CLI flag),
+    never inferred from the data's magnitude: AIS SOG is transmitted in raw
+    0.1-knot steps (0-1022, with 1023 meaning "not available"), but some
+    upstream converters already rescale it to knots (0.0-102.2) before it
+    reaches this function, and the two encodings are not reliably
+    distinguishable from a single column's value range alone (e.g. RWS's own
+    feed arrives already in knots, topping out at 102.3). Pass
+    raw_units=True only when you have confirmed the source column is still
+    in raw AIS units and needs dividing by 10.
+    """
+    sog = np.asarray(sog_raw, dtype=float).copy()
+    if raw_units:
+        sog = sog / 10.0
+    invalid_mask = sog >= SOG_NOT_AVAILABLE_KNOTS
+    _warn_if_sog_units_implausible(sog, raw_units, invalid_mask)
+    cap_mask = ~invalid_mask & np.isclose(sog, SOG_CAP_KNOTS, atol=0.05)
+    sog[invalid_mask] = np.nan
+    sog[cap_mask] = SOG_CAP_KNOTS
+    return sog
+
+
+def _warn_if_sog_units_implausible(sog_after_scaling, raw_units: bool, invalid_mask) -> None:
+    """
+    Sanity-check (warn only, never auto-correct) that the declared raw_units
+    matches what the data looks like. This can't prove the flag is right --
+    only flag values implausible enough to suggest it's wrong.
+    """
+    finite = sog_after_scaling[np.isfinite(sog_after_scaling)]
+    if finite.size == 0:
+        return
+
+    invalid_fraction = invalid_mask.sum() / sog_after_scaling.size
+    if invalid_fraction > 0.01:
+        logger.warning(
+            f"clean_sog: {invalid_fraction:.1%} of values exceeded the max valid "
+            f"SOG ({SOG_NOT_AVAILABLE_KNOTS} knots) after applying raw_units="
+            f"{raw_units} and were dropped as 'not available'. If this fraction "
+            "looks too high, the source column's units may not match --sog-raw-units."
+        )
+
+    if raw_units:
+        valid = finite[finite < SOG_NOT_AVAILABLE_KNOTS]
+        if valid.size and np.nanmax(valid) < 5.0:
+            logger.warning(
+                "clean_sog: raw_units=True was declared, but after dividing by "
+                f"10 the max resulting speed is only {np.nanmax(valid):.2f} knots. "
+                "The source column may already have been in knots -- check "
+                "--sog-raw-units."
+            )
+
+
+def strip_tz_and_epoch_seconds(time_series: pd.Series) -> np.ndarray:
+    """
+    Convert a datetime Series to epoch seconds (float64), tolerating tz-aware
+    input. `.values.astype('datetime64[s]')` on a tz-aware column returns an
+    object array of Timestamps (not a numpy datetime64 array), and the
+    subsequent astype raises -- so tz must be dropped first, matching
+    add_hilbert_index's handling in moving_dask/trajectory.py.
+    """
+    if hasattr(time_series.dt, "tz") and time_series.dt.tz is not None:
+        time_series = time_series.dt.tz_localize(None)
+    return time_series.values.astype('datetime64[s]').astype('float64')
+
 
 def normalize_to_epoch(df: pd.DataFrame, time_col: str = 'base_date_time') -> pd.DataFrame:
     """Normalizes timestamps in a vessel trajectory dataframe to be epoch-relative (starting at 1970-01-01)."""
@@ -278,9 +378,6 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
     """
     Convert NDJSON AIS data to standard flat GeoParquet.
     """
-    import dask.bag as db
-    import json
-    
     if scheduler:
         logger.info(f"Connecting to Dask scheduler at {scheduler}...")
         client = Client(scheduler)
@@ -320,7 +417,6 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
             
             # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
             # This generates POINT EMPTY geometries without discarding any raw rows
-            import numpy as np
             df.loc[df['latitude'] == 91.0, 'latitude'] = np.nan
             df.loc[df['longitude'] == 181.0, 'longitude'] = np.nan
             
@@ -416,7 +512,6 @@ def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
             
             # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
             # This generates POINT EMPTY geometries without discarding any raw rows
-            import numpy as np
             df.loc[df['latitude'] == 91.0, 'latitude'] = np.nan
             df.loc[df['longitude'] == 181.0, 'longitude'] = np.nan
             
@@ -459,9 +554,6 @@ def run_linestring_generation(input_file: Path, output_file: Path, vessel_codes_
     """
     Aggregate point pings from trajectorized parquet into LineString GeoParquet with optional vessel codes config.
     """
-    from shapely.geometry import LineString, MultiLineString
-    import numpy as np
-    
     logger.info(f"Loading trajectorized points from {input_file}...")
     gdf = gpd.read_parquet(input_file)
     
@@ -555,7 +647,7 @@ def run_outlier_filtering(input_file: Path, output_file: Path, v_max: float = No
 
     lon_all = gdf['longitude'].values
     lat_all = gdf['latitude'].values
-    t_all = gdf[time_col].values.astype('datetime64[s]').astype('float64')
+    t_all = strip_tz_and_epoch_seconds(gdf[time_col])
     keep_mask = np.ones(len(gdf), dtype=bool)
 
     logger.info(f"Detecting speed-implausible position outliers per vessel (v_max={v_max} m/s, d_min={d_min} m)...")
@@ -578,15 +670,11 @@ def run_outlier_filtering(input_file: Path, output_file: Path, v_max: float = No
     logger.info("Outlier filtering complete!")
 
 
-def run_segment_generation(input_file: Path, output_file: Path, epoch_time: bool = False, vessel_codes_json: Path = None):
+def run_segment_generation(input_file: Path, output_file: Path, sog_raw_units: bool, epoch_time: bool = False, vessel_codes_json: Path = None):
     """
     Generate point-pair line segments from trajectorized point dataset,
     with option to use epoch-normalized timestamps.
     """
-    from shapely.geometry import LineString
-    import shapely
-    import numpy as np
-    
     logger.info(f"Loading trajectorized points from {input_file}...")
     gdf = gpd.read_parquet(input_file)
     
@@ -619,16 +707,18 @@ def run_segment_generation(input_file: Path, output_file: Path, epoch_time: bool
     logger.info("Creating LineString geometries...")
     geoms = shapely.linestrings(coords)
 
+    if 'shiptypeAIS' not in p1.columns:
+        raise KeyError(
+            "Expected a 'shiptypeAIS' column for vessel-group classification; "
+            f"not found in dataset schema. Available columns: {list(p1.columns)}"
+        )
     vessel_mapping = build_vessel_mapping(vessel_codes_json)
-    if 'shiptypeAIS' in p1.columns:
-        vessel_groups = pd.Series(p1['shiptypeAIS'].values).apply(lambda st: get_vessel_group(st, vessel_mapping)).values
-    else:
-        vessel_groups = "Other"
+    vessel_groups = pd.Series(p1['shiptypeAIS'].values).apply(lambda st: get_vessel_group(st, vessel_mapping)).values
 
     df_segments = pd.DataFrame({
         'MMSI': p1[vessel_col].values,
         'trip_id': p1['trip_id'].values,
-        'VesselType': p1['shiptypeAIS'].values if 'shiptypeAIS' in p1.columns else np.nan,
+        'VesselType': p1['shiptypeAIS'].values,
         'VesselGroup': vessel_groups,
         'Length': p1['length'].values if 'length' in p1.columns else np.nan,
         'Width': p1['beam'].values if 'beam' in p1.columns else np.nan,
@@ -639,20 +729,11 @@ def run_segment_generation(input_file: Path, output_file: Path, epoch_time: bool
         'acceleration_mps2': p1['acceleration_mps2'].values if 'acceleration_mps2' in p1.columns else np.nan,
     })
 
-    # Extract, clean, and add SOG variable (1023 represents 'not available', 1022 represents '>=102.2 knots')
-    if 'sog' in p1.columns:
-        sog_vals = p1['sog'].astype(float).values.copy()
-        # Handle both scaled (divided by 10) and unscaled invalid SOG values
-        invalid_mask = (sog_vals >= 1023.0) | (sog_vals >= 102.3)
-        sog_vals[invalid_mask] = np.nan
-        
-        cap_mask = (sog_vals == 1022.0) | (sog_vals == 102.2)
-        sog_vals[cap_mask] = 102.2
-        
-        df_segments['sog'] = sog_vals
-    else:
-        df_segments['sog'] = np.nan
-    
+    # Extract and clean SOG variable
+    if 'sog' not in p1.columns:
+        raise KeyError(f"Expected a 'sog' column in the trajectorized dataset. Available columns: {list(p1.columns)}")
+    df_segments['sog'] = clean_sog(p1['sog'].values, raw_units=sog_raw_units)
+
     df_segments['segment_duration_s'] = (df_segments['segment_end_time'] - df_segments['segment_start_time']).dt.total_seconds()
     gdf_segments = gpd.GeoDataFrame(df_segments, geometry=geoms, crs="EPSG:4326")
     

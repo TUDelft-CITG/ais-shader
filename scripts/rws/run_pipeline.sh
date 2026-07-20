@@ -61,9 +61,13 @@ process_month() {
         --output-file "$INTERMEDIATE_DIR/${tag}_trajectorized.geoparquet"
 
     # Stage 4: Generate Segments
+    # --sog-knots: confirmed from RWS data (sog tops out at 102.3, in 0.1-knot
+    # steps of real vessel speeds) that this feed is already in knots, not
+    # raw AIS units needing /10.
     uv run ais-shader trajectory to-segment \
         "$INTERMEDIATE_DIR/${tag}_trajectorized.geoparquet" \
-        --output-file "$INTERMEDIATE_DIR/${tag}_segments.geoparquet"
+        --output-file "$INTERMEDIATE_DIR/${tag}_segments.geoparquet" \
+        --sog-knots
 
     # Stage 4b: Generate full trajectory LineStrings (one line per voyage)
     uv run ais-shader trajectory to-linestring \
