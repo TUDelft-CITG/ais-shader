@@ -548,12 +548,7 @@ def run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs,
 
     # Step 2: Loop over each band to calculate robust max and render PNG pyramids
     for band in bands:
-        # bands == [None] for the single-band path (no "band" coordinate
-        # labels, see the detection above) -- there's only ever one band to
-        # log in that case, so it's labeled for the log line rather than
-        # printing "None".
-        band_label = band if band else "(single unnamed band)"
-        logger.info(f"--- Processing Band: {band_label} ---")
+        logger.info(f"--- Processing Band: {band} ---")
         band_log_scale = log_scale
         band_colormap = colormap_name
         
