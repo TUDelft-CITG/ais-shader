@@ -1,12 +1,10 @@
 import os
+import subprocess
 import zipfile
 from pathlib import Path
+from typing import Iterator, Optional
 
-import fsspec.compression
-import pyzipper
 from dotenv import load_dotenv
-
-AESZIP_CODEC_NAME = "aeszip"
 
 
 def is_encrypted_zip(input_file: Path) -> bool:
@@ -42,21 +40,33 @@ def find_zip_password(input_file: Path) -> str:
     )
 
 
-def _open_aeszip(infile, mode="rb", password: bytes = b"", **kwargs):
-    z = pyzipper.AESZipFile(infile)
-    z.setpassword(password)
-    name = z.namelist()[0]
-    return z.open(name, mode="r")
+def iter_zip_member_lines(input_file: Path, password: Optional[str] = None) -> Iterator[bytes]:
+    """Stream a zip archive's contents line-by-line via the `7z` CLI.
 
-
-def register_aeszip_codec(password: bytes) -> None:
-    """Register the "aeszip" fsspec compression codec with a bound password.
-
-    Must be called both in the process building the dask graph and (via
-    Client.run) on every worker process, since fsspec's compression
-    registry is in-memory per-process and workers don't inherit it.
+    Unlike pyzipper/fsspec, this never gives Dask a compressed stream to (fail
+    to) split -- it shells out to `7z e -so` so the whole archive is never
+    held in memory or written out decrypted to disk; only one line is ever
+    in flight at a time. Used for large AES-encrypted or plain zip archives
+    where extracting the full decrypted content isn't an option.
     """
-    import functools
+    cmd = ["7z", "e", "-so"]
+    if password:
+        cmd.append(f"-p{password}")
+    cmd.append(str(input_file))
 
-    callback = functools.partial(_open_aeszip, password=password)
-    fsspec.compression.register_compression(AESZIP_CODEC_NAME, callback, [], force=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        for raw_line in proc.stdout:
+            line = raw_line.strip()
+            if line:
+                yield line
+    finally:
+        proc.stdout.close()
+        stderr_output = proc.stderr.read()
+        proc.stderr.close()
+        returncode = proc.wait()
+        if returncode != 0:
+            raise RuntimeError(
+                f"7z extraction of {input_file!r} failed (exit {returncode}): "
+                f"{stderr_output.decode(errors='replace').strip()}"
+            )
