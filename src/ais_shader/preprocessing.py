@@ -1,5 +1,7 @@
+import functools
 import json
 import logging
+import zipfile
 from pathlib import Path
 import dask.bag as db
 import dask.dataframe as dd
@@ -10,6 +12,7 @@ import pandas as pd
 import shapely
 from dask.distributed import Client
 from shapely.geometry import LineString
+from .archive import is_encrypted_zip, find_zip_password, register_aeszip_codec, AESZIP_CODEC_NAME
 from .data_loader import detect_hive_partitioning
 from .moving_dask.trajectory import filter_speed_outliers, DEFAULT_OUTLIER_V_MAX, DEFAULT_OUTLIER_D_MIN
 
@@ -336,30 +339,82 @@ def to_float(val):
         return None
 
 
-def flatten_row(row):
+def _dig(row, path):
+    """Follow a dotted path of dict keys (e.g. 'data.casco.to_bow') and
+    return the unwrapped {"value"|"code": ...} leaf, or None."""
+    node = row
+    for key in path.split('.'):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return unwrap_field(node)
+
+
+def _first(row, *paths):
+    """First non-None value among candidate paths, in priority order.
+
+    RWS delivers ndjson in (at least) two profiles: a flat one, where AIS
+    fields are top-level siblings of track_id/timestamp, and an "aggregated"
+    one, where they're nested under a top-level "data" key (and, for a few
+    fields, nested further still). Listing both paths here is what lets
+    flatten_row support either profile transparently.
+    """
+    for path in paths:
+        value = _dig(row, path)
+        if value is not None:
+            return value
+    return None
+
+
+def flatten_row(row, include_identification: bool = False):
+    """Flatten a single AIS ndjson record.
+
+    include_identification: also extract imo/name/callsign from
+    data.identification. Only meaningful for the "aggregated" profile, which
+    is the only one that carries this block -- callers should detect the
+    profile once per file and pass this consistently for every row, so the
+    resulting dask bag has a uniform schema.
+    """
+    # Prefer the real AIS MMSI (present in the "aggregated" profile);
+    # fall back to track_id for the flat profile, which has no mmsi field.
+    mmsi = _first(row, 'mmsi', 'track_id')
     track_id = row.get('track_id')
     timestamp = row.get('timestamp')
-    
-    longitude = to_float(unwrap_field(row.get('longitude')))
-    latitude = to_float(unwrap_field(row.get('latitude')))
-    
-    cog = to_float(unwrap_field(row.get('cog')))
-    sog = to_float(unwrap_field(row.get('sog')))
-    heading = to_float(unwrap_field(row.get('heading')))
-    beam = to_float(unwrap_field(row.get('beam')))
-    length = to_float(unwrap_field(row.get('length')))
-    draught = to_float(unwrap_field(row.get('draught')))
-    
-    status = unwrap_field(row.get('status'))
+
+    longitude = to_float(_first(row, 'longitude', 'data.longitude'))
+    latitude = to_float(_first(row, 'latitude', 'data.latitude'))
+
+    cog = to_float(_first(row, 'cog', 'data.cog'))
+    sog = to_float(_first(row, 'sog', 'data.sog'))
+    heading = to_float(_first(row, 'heading', 'data.heading'))
+
+    beam = to_float(_first(row, 'beam', 'data.beam'))
+    if beam is None:
+        to_port = to_float(_dig(row, 'data.casco.to_port'))
+        to_starboard = to_float(_dig(row, 'data.casco.to_starboard'))
+        if to_port is not None and to_starboard is not None:
+            beam = to_port + to_starboard
+
+    length = to_float(_first(row, 'length', 'data.length'))
+    if length is None:
+        to_bow = to_float(_dig(row, 'data.casco.to_bow'))
+        to_stern = to_float(_dig(row, 'data.casco.to_stern'))
+        if to_bow is not None and to_stern is not None:
+            length = to_bow + to_stern
+
+    draught = to_float(_first(row, 'draught', 'data.draught', 'data.casco.draught'))
+
+    status = _first(row, 'status', 'data.status')
     if status is not None:
         status = str(status)
-        
-    shiptypeAIS = unwrap_field(row.get('shiptypeAIS'))
+
+    shiptypeAIS = _first(row, 'shiptypeAIS', 'data.shiptypeAIS', 'data.identification.shiptypeAIS')
     if shiptypeAIS is not None:
         shiptypeAIS = str(shiptypeAIS)
-        
-    return {
-        'mmsi': track_id,
+
+    result = {
+        'mmsi': mmsi,
+        'track_id': track_id,
         'base_date_time': timestamp,
         'longitude': longitude,
         'latitude': latitude,
@@ -372,6 +427,25 @@ def flatten_row(row):
         'status': status,
         'shiptypeAIS': shiptypeAIS
     }
+
+    if include_identification:
+        imo = _first(row, 'imo', 'data.identification.imo')
+        if imo is not None:
+            imo = str(imo)
+
+        name = _first(row, 'name', 'data.identification.name')
+        if isinstance(name, str):
+            name = name.strip()
+
+        callsign = _first(row, 'callsign', 'data.identification.callsign')
+        if isinstance(callsign, str):
+            callsign = callsign.strip()
+
+        result['imo'] = imo
+        result['name'] = name
+        result['callsign'] = callsign
+
+    return result
 
 
 def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
@@ -388,12 +462,36 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
     logger.info(f"Dashboard: {client.dashboard_link}")
     
     try:
+        if is_encrypted_zip(input_file):
+            logger.info(f"Detected AES-encrypted zip archive at {input_file}, decrypting...")
+            password = find_zip_password(input_file).encode()
+            register_aeszip_codec(password)
+            client.run(register_aeszip_codec, password)
+            compression = AESZIP_CODEC_NAME
+        elif zipfile.is_zipfile(input_file):
+            compression = "zip"
+        else:
+            compression = "infer"
+
         logger.info(f"Reading NDJSON from {input_file} using Dask Bag...")
-        bag = db.read_text(str(input_file)).map(json.loads).map(flatten_row)
-        
+        text_bag = db.read_text(str(input_file), compression=compression)
+
+        # Peek at the first record to detect the "aggregated" profile
+        # (nested under "data", carrying an identification block), so the
+        # dataframe schema stays uniform across every row in this file.
+        first_record = json.loads(text_bag.take(1)[0])
+        include_identification = isinstance(first_record.get('data'), dict) and isinstance(
+            first_record['data'].get('identification'), dict
+        )
+
+        bag = text_bag.map(json.loads).map(
+            functools.partial(flatten_row, include_identification=include_identification)
+        )
+
         # Meta schema for mapping to dataframe
         meta = {
             'mmsi': 'object',
+            'track_id': 'object',
             'base_date_time': 'object',
             'longitude': 'float64',
             'latitude': 'float64',
@@ -406,6 +504,10 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
             'status': 'object',
             'shiptypeAIS': 'object'
         }
+        if include_identification:
+            meta['imo'] = 'object'
+            meta['name'] = 'object'
+            meta['callsign'] = 'object'
         
         logger.info("Converting Dask Bag to DataFrame...")
         ddf = bag.to_dataframe(meta=meta)
@@ -413,7 +515,7 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
         # Convert to GeoDataFrame
         logger.info("Converting DataFrame to GeoDataFrame with Point geometry...")
         def make_points(df):
-            df['base_date_time'] = pd.to_datetime(df['base_date_time'], utc=True).dt.tz_localize(None)
+            df['base_date_time'] = pd.to_datetime(df['base_date_time'], utc=True, format='ISO8601').dt.tz_localize(None)
             
             # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
             # This generates POINT EMPTY geometries without discarding any raw rows

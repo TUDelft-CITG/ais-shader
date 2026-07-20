@@ -37,7 +37,7 @@ def _default_output_path(input_path: Path, suffix: str) -> Path:
     # Strip common suffixes sequentially (e.g., .csv.zip -> .csv -> base) using pathlib
     while True:
         ext = Path(stem).suffix
-        if ext.lower() in {".zip", ".csv", ".ndjson", ".parquet", ".geoparquet"}:
+        if ext.lower() in {".zip", ".7z", ".csv", ".ndjson", ".parquet", ".geoparquet"}:
             stem = stem[:-len(ext)]
         else:
             break
