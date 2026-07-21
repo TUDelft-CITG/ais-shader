@@ -25,6 +25,8 @@ dependencies = [
     "zarr>=2.18.0",
     "cmcrameri>=1.9",
     "mlflow>=2.11.0",
+    "pyzipper>=0.3.6",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]

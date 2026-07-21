@@ -1,5 +1,8 @@
+import functools
 import json
 import logging
+import shutil
+import zipfile
 from pathlib import Path
 import dask.bag as db
 import dask.dataframe as dd
@@ -10,6 +13,8 @@ import pandas as pd
 import shapely
 from dask.distributed import Client
 from shapely.geometry import LineString
+from tqdm.auto import tqdm
+from .archive import is_encrypted_zip, find_zip_password, iter_zip_member_lines
 from .data_loader import detect_hive_partitioning
 from .moving_dask.trajectory import filter_speed_outliers, DEFAULT_OUTLIER_V_MAX, DEFAULT_OUTLIER_D_MIN
 
@@ -315,6 +320,88 @@ def add_date_partitions(df: pd.DataFrame, time_col: str = "base_date_time") -> p
     return df
 
 
+def make_points(df: pd.DataFrame) -> gpd.GeoDataFrame:
+    """Flat AIS DataFrame -> GeoDataFrame with Point geometry and year/month/day columns."""
+    df['base_date_time'] = pd.to_datetime(df['base_date_time'], utc=True, format='ISO8601').dt.tz_localize(None)
+
+    # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
+    # This generates POINT EMPTY geometries without discarding any raw rows
+    df.loc[df['latitude'] == 91.0, 'latitude'] = np.nan
+    df.loc[df['longitude'] == 181.0, 'longitude'] = np.nan
+
+    geometry = gpd.points_from_xy(df['longitude'], df['latitude'])
+    gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
+    return add_date_partitions(gdf)
+
+
+def _write_gdf_partitioned(gdf: gpd.GeoDataFrame, output_file: Path, batch_idx: int) -> None:
+    """Append one batch to a year=/month=/day= hive-partitioned GeoParquet directory."""
+    for (year, month, day), group in gdf.groupby(["year", "month", "day"], sort=False):
+        partition_dir = output_file / f"year={year}" / f"month={month}" / f"day={day}"
+        partition_dir.mkdir(parents=True, exist_ok=True)
+        group.drop(columns=["year", "month", "day"]).to_parquet(
+            partition_dir / f"part-{batch_idx}.parquet"
+        )
+
+
+NDJSON_STREAM_BATCH_SIZE = 250_000
+"""Rows per batch in run_ndjson_conversion_streaming. Sized to keep peak
+memory (batch of dicts + DataFrame + GeoDataFrame all resident at once)
+comfortably above ~300MB per batch, measured against realistic
+"aggregated"-profile rows (the heaviest, with imo/name/callsign columns)."""
+
+
+def _has_identification_block(row: dict) -> bool:
+    """True if row carries the "aggregated" profile's data.identification block (see flatten_row)."""
+    return isinstance(row.get('data', {}).get('identification'), dict)
+
+
+def _flush_batch(batch: list, output_file: Path, batch_idx: int, progress: tqdm) -> int:
+    """Write one batch to its hive partitions and report progress. Returns the next batch index."""
+    _write_gdf_partitioned(make_points(pd.DataFrame(batch)), output_file, batch_idx)
+    progress.set_postfix(batches_written=batch_idx + 1)
+    return batch_idx + 1
+
+
+def run_ndjson_conversion_streaming(input_file: Path, output_file: Path, password: str = None) -> None:
+    """
+    Convert NDJSON AIS data from a zip archive to GeoParquet without Dask.
+
+    A zip's compressed (and possibly AES-encrypted) stream can't be split
+    across Dask partitions, so `dask.bag.read_text` used to fall back to
+    reading the whole decrypted archive into a single partition/worker's
+    memory. This streams it through `7z e -so` (see iter_zip_member_lines)
+    and writes fixed-size batches straight to the partitioned GeoParquet
+    output, so memory use stays bounded by NDJSON_STREAM_BATCH_SIZE rather
+    than the archive size, without ever materializing the decrypted archive
+    on disk either. Relies on input rows being ordered by time, so each
+    batch only ever touches a small, contiguous set of day partitions.
+    """
+    output_file.mkdir(parents=True, exist_ok=True)
+
+    batch = []
+    include_identification = None
+    batch_idx = 0
+
+    with tqdm(desc="Streaming NDJSON via 7z", unit=" rows", unit_scale=True) as progress:
+        for line in iter_zip_member_lines(input_file, password=password):
+            row = json.loads(line)
+            if include_identification is None:
+                include_identification = _has_identification_block(row)
+
+            batch.append(flatten_row(row, include_identification=include_identification))
+            progress.update(1)
+
+            if len(batch) >= NDJSON_STREAM_BATCH_SIZE:
+                batch_idx = _flush_batch(batch, output_file, batch_idx, progress)
+                batch = []
+
+        if batch:
+            batch_idx = _flush_batch(batch, output_file, batch_idx, progress)
+            batch_idx += 1
+            progress.set_postfix(batches_written=batch_idx)
+
+
 def unwrap_field(obj):
     if obj is None:
         return None
@@ -336,30 +423,82 @@ def to_float(val):
         return None
 
 
-def flatten_row(row):
+def _dig(row, path):
+    """Follow a dotted path of dict keys (e.g. 'data.casco.to_bow') and
+    return the unwrapped {"value"|"code": ...} leaf, or None."""
+    node = row
+    for key in path.split('.'):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return unwrap_field(node)
+
+
+def _first(row, *paths):
+    """First non-None value among candidate paths, in priority order.
+
+    RWS delivers ndjson in (at least) two profiles: a flat one, where AIS
+    fields are top-level siblings of track_id/timestamp, and an "aggregated"
+    one, where they're nested under a top-level "data" key (and, for a few
+    fields, nested further still). Listing both paths here is what lets
+    flatten_row support either profile transparently.
+    """
+    for path in paths:
+        value = _dig(row, path)
+        if value is not None:
+            return value
+    return None
+
+
+def flatten_row(row, include_identification: bool = False):
+    """Flatten a single AIS ndjson record.
+
+    include_identification: also extract imo/name/callsign from
+    data.identification. Only meaningful for the "aggregated" profile, which
+    is the only one that carries this block -- callers should detect the
+    profile once per file and pass this consistently for every row, so the
+    resulting dask bag has a uniform schema.
+    """
+    # Prefer the real AIS MMSI (present in the "aggregated" profile);
+    # fall back to track_id for the flat profile, which has no mmsi field.
+    mmsi = _first(row, 'mmsi', 'track_id')
     track_id = row.get('track_id')
     timestamp = row.get('timestamp')
-    
-    longitude = to_float(unwrap_field(row.get('longitude')))
-    latitude = to_float(unwrap_field(row.get('latitude')))
-    
-    cog = to_float(unwrap_field(row.get('cog')))
-    sog = to_float(unwrap_field(row.get('sog')))
-    heading = to_float(unwrap_field(row.get('heading')))
-    beam = to_float(unwrap_field(row.get('beam')))
-    length = to_float(unwrap_field(row.get('length')))
-    draught = to_float(unwrap_field(row.get('draught')))
-    
-    status = unwrap_field(row.get('status'))
+
+    longitude = to_float(_first(row, 'longitude', 'data.longitude'))
+    latitude = to_float(_first(row, 'latitude', 'data.latitude'))
+
+    cog = to_float(_first(row, 'cog', 'data.cog'))
+    sog = to_float(_first(row, 'sog', 'data.sog'))
+    heading = to_float(_first(row, 'heading', 'data.heading'))
+
+    beam = to_float(_first(row, 'beam', 'data.beam'))
+    if beam is None:
+        to_port = to_float(_dig(row, 'data.casco.to_port'))
+        to_starboard = to_float(_dig(row, 'data.casco.to_starboard'))
+        if to_port is not None and to_starboard is not None:
+            beam = to_port + to_starboard
+
+    length = to_float(_first(row, 'length', 'data.length'))
+    if length is None:
+        to_bow = to_float(_dig(row, 'data.casco.to_bow'))
+        to_stern = to_float(_dig(row, 'data.casco.to_stern'))
+        if to_bow is not None and to_stern is not None:
+            length = to_bow + to_stern
+
+    draught = to_float(_first(row, 'draught', 'data.draught', 'data.casco.draught'))
+
+    status = _first(row, 'status', 'data.status')
     if status is not None:
         status = str(status)
-        
-    shiptypeAIS = unwrap_field(row.get('shiptypeAIS'))
+
+    shiptypeAIS = _first(row, 'shiptypeAIS', 'data.shiptypeAIS', 'data.identification.shiptypeAIS')
     if shiptypeAIS is not None:
         shiptypeAIS = str(shiptypeAIS)
-        
-    return {
-        'mmsi': track_id,
+
+    result = {
+        'mmsi': mmsi,
+        'track_id': track_id,
         'base_date_time': timestamp,
         'longitude': longitude,
         'latitude': latitude,
@@ -373,27 +512,94 @@ def flatten_row(row):
         'shiptypeAIS': shiptypeAIS
     }
 
+    if include_identification:
+        imo = _first(row, 'imo', 'data.identification.imo')
+        if imo is not None:
+            imo = str(imo)
+
+        name = _first(row, 'name', 'data.identification.name')
+        if isinstance(name, str):
+            name = name.strip()
+
+        callsign = _first(row, 'callsign', 'data.identification.callsign')
+        if isinstance(callsign, str):
+            callsign = callsign.strip()
+
+        result['imo'] = imo
+        result['name'] = name
+        result['callsign'] = callsign
+
+    return result
+
+
+def _require_7z(input_file: Path) -> None:
+    if shutil.which("7z") is None:
+        raise RuntimeError(
+            f"'{input_file}' is a zip archive, but the '7z' command-line tool "
+            "is required to read it and was not found on PATH. Install p7zip "
+            "(e.g. `brew install p7zip` or `apt install p7zip-full`) and retry."
+        )
+
+
+def _convert_zip_ndjson(input_file: Path, output_file: Path) -> None:
+    """Route a zip (encrypted or plain) NDJSON input through the 7z-streaming path.
+
+    A zip's compressed (and possibly AES-encrypted) stream can't be split
+    across Dask partitions, so handing it to dask.bag.read_text forces the
+    whole decrypted archive into one partition/worker's memory. Stream it
+    through the `7z` CLI instead (see run_ndjson_conversion_streaming) --
+    no Dask cluster needed here.
+    """
+    _require_7z(input_file)
+    if is_encrypted_zip(input_file):
+        logger.info(f"Detected AES-encrypted zip archive at {input_file}, streaming via 7z...")
+        password = find_zip_password(input_file)
+    else:
+        logger.info(f"Detected zip archive at {input_file}, streaming via 7z...")
+        password = None
+    run_ndjson_conversion_streaming(input_file, output_file, password=password)
+
 
 def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
     """
     Convert NDJSON AIS data to standard flat GeoParquet.
     """
+    if is_encrypted_zip(input_file) or zipfile.is_zipfile(input_file):
+        _convert_zip_ndjson(input_file, output_file)
+        return
+
     if scheduler:
         logger.info(f"Connecting to Dask scheduler at {scheduler}...")
         client = Client(scheduler)
     else:
         logger.info("Starting Local Dask Client...")
         client = Client()
-        
+
     logger.info(f"Dashboard: {client.dashboard_link}")
-    
+
     try:
         logger.info(f"Reading NDJSON from {input_file} using Dask Bag...")
-        bag = db.read_text(str(input_file)).map(json.loads).map(flatten_row)
-        
+        text_bag = db.read_text(str(input_file), compression="infer", blocksize="64MB").filter(
+            lambda line: line.strip()
+        )
+
+        # Peek at the first record to detect the "aggregated" profile
+        # (nested under "data", carrying an identification block), so the
+        # dataframe schema stays uniform across every row in this file.
+        first_lines = text_bag.take(1)
+        if not first_lines:
+            raise ValueError(f"'{input_file}' contains no NDJSON records.")
+        first_record = json.loads(first_lines[0])
+        include_identification = _has_identification_block(first_record)
+
+        bag = text_bag.map(json.loads).map(
+            functools.partial(flatten_row, include_identification=include_identification)
+        )
+
         # Meta schema for mapping to dataframe
         meta = {
             'mmsi': 'object',
+            'track_id': 'object',
             'base_date_time': 'object',
             'longitude': 'float64',
             'latitude': 'float64',
@@ -406,24 +612,16 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
             'status': 'object',
             'shiptypeAIS': 'object'
         }
-        
+        if include_identification:
+            meta['imo'] = 'object'
+            meta['name'] = 'object'
+            meta['callsign'] = 'object'
+
         logger.info("Converting Dask Bag to DataFrame...")
         ddf = bag.to_dataframe(meta=meta)
-        
+
         # Convert to GeoDataFrame
         logger.info("Converting DataFrame to GeoDataFrame with Point geometry...")
-        def make_points(df):
-            df['base_date_time'] = pd.to_datetime(df['base_date_time'], utc=True).dt.tz_localize(None)
-            
-            # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
-            # This generates POINT EMPTY geometries without discarding any raw rows
-            df.loc[df['latitude'] == 91.0, 'latitude'] = np.nan
-            df.loc[df['longitude'] == 181.0, 'longitude'] = np.nan
-            
-            geometry = gpd.points_from_xy(df['longitude'], df['latitude'])
-            gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
-            return add_date_partitions(gdf)
-
         meta_gdf = gpd.GeoDataFrame(
             ddf._meta.assign(base_date_time=pd.to_datetime([])),
             geometry=gpd.GeoSeries([], dtype="object"),
@@ -440,7 +638,7 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
         logger.info(f"Saving GeoParquet to {output_file}, partitioned by year/month/day...")
         ddf_geo.to_parquet(output_file, partition_on=["year", "month", "day"])
         logger.info("NDJSON conversion complete!")
-        
+
     finally:
         client.close()
 

@@ -1,19 +1,11 @@
 import logging
 import sys
+import tomllib
 import warnings
-# Suppress specific, known-noisy warnings that don't indicate real problems
-# for CLI users -- pandas/dask FutureWarnings about upcoming default changes
-# this project doesn't control, and zarr's informational notices about its
-# own format-spec status -- rather than blanket-suppressing every warning
-# category (which would also hide genuine issues like RuntimeWarning for
-# invalid numeric operations).
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", message=".*[Cc]onsolidated metadata.*")
 from pathlib import Path
+
 import click
 import dask_geopandas
-import pandas as pd
-import tomllib
 from dask.distributed import Client
 
 # Import from src modules
@@ -23,6 +15,15 @@ from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_con
 from .analysis import run_passage_analysis
 from .data_loader import detect_hive_partitioning
 from .moving_dask.trajectory import trajectorize_dataframe
+
+# Suppress specific, known-noisy warnings that don't indicate real problems
+# for CLI users -- pandas/dask FutureWarnings about upcoming default changes
+# this project doesn't control, and zarr's informational notices about its
+# own format-spec status -- rather than blanket-suppressing every warning
+# category (which would also hide genuine issues like RuntimeWarning for
+# invalid numeric operations).
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=".*[Cc]onsolidated metadata.*")
 
 # Configure logging
 logging.basicConfig(
@@ -37,7 +38,7 @@ def _default_output_path(input_path: Path, suffix: str) -> Path:
     # Strip common suffixes sequentially (e.g., .csv.zip -> .csv -> base) using pathlib
     while True:
         ext = Path(stem).suffix
-        if ext.lower() in {".zip", ".csv", ".ndjson", ".parquet", ".geoparquet"}:
+        if ext.lower() in {".zip", ".7z", ".csv", ".ndjson", ".parquet", ".geoparquet"}:
             stem = stem[:-len(ext)]
         else:
             break
