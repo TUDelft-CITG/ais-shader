@@ -13,6 +13,7 @@ from .renderer import run_rendering
 from .postprocessing import run_post_processing
 from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_csv_conversion, run_linestring_generation, run_segment_generation, run_outlier_filtering, normalize_to_epoch
 from .analysis import run_passage_analysis
+from .events import run_line_crossing_detection, run_polygon_entry_exit_detection
 from .data_loader import detect_hive_partitioning
 from .moving_dask.trajectory import trajectorize_dataframe
 
@@ -543,10 +544,76 @@ def to_segment(input_file, output_file, epoch_time, vessel_codes_json, sog_raw_u
     run_segment_generation(input_file, output_file, sog_raw_units, epoch_time, vessel_codes_json)
 
 
+@click.group(name="events")
+def events():
+    """Detect vessel events (line crossings, polygon entry/exit) from a segment table."""
+    pass
+
+
+@events.command(name="line-crossings")
+@click.argument(
+    "input-file",
+    type=click.Path(exists=True, path_type=Path),
+)
+@click.option(
+    "--passage-file",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to a reference passage line GeoJSON/GPKG file.",
+)
+@click.option(
+    "--output-file",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to output GeoParquet file. Defaults to input file name with -line-crossings.geoparquet extension.",
+)
+def line_crossings(input_file, passage_file, output_file):
+    """
+    Detect where AIS trajectory segments cross reference passage lines.
+    """
+    output_file = output_file or _default_output_path(input_file, "-line-crossings.geoparquet")
+    run_line_crossing_detection(input_file, passage_file, output_file)
+
+
+@events.command(name="polygon-entry-exit")
+@click.argument(
+    "input-file",
+    type=click.Path(exists=True, path_type=Path),
+)
+@click.option(
+    "--polygons-file",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to a reference polygon GeoJSON/GPKG file.",
+)
+@click.option(
+    "--polygon-id-col",
+    type=str,
+    default="name",
+    help="Property in --polygons-file identifying each polygon.",
+)
+@click.option(
+    "--output-file",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to output GeoParquet file. Defaults to input file name with -polygon-events.geoparquet extension.",
+)
+def polygon_entry_exit(input_file, polygons_file, polygon_id_col, output_file):
+    """
+    Detect vessel entry into (and exit from) reference polygons.
+    """
+    output_file = output_file or _default_output_path(input_file, "-polygon-events.geoparquet")
+    run_polygon_entry_exit_detection(input_file, polygons_file, output_file, polygon_id_col)
+
+
 # Register trajectory commands
 cli.add_command(trajectory)
 # Register convert commands
 cli.add_command(convert)
+# Register events commands
+cli.add_command(events)
 
 
 if __name__ == "__main__":
