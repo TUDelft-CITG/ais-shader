@@ -347,6 +347,10 @@ def process_single_vessel_partition(
             v_df['time_diff_s'] = np.nan
             v_df['rolling_area_m2'] = 0.0
             v_df['trip_id'] = v_df[vessel_id_col].astype(str) + "_1"
+            v_df['speed_mps'] = np.nan
+            v_df['acceleration_mps2'] = np.nan
+            v_df['turn_rate_from_cog'] = np.nan
+            v_df['turn_rate_from_heading'] = np.nan
             return v_df
 
         # 1. Sort chronologically
@@ -447,7 +451,7 @@ def trajectorize_dataframe(
     shuffle_backend: str = "tasks",
     n_partitions: int = 128,
     input_crs: str = "EPSG:4326",
-    partition_method: str = "spatiotemporal",  # "vessel" or "spatiotemporal"
+    partition_method: str = "vessel",  # "vessel" or "spatiotemporal"
     hilbert_p: int = 16,
     dataset_path: str = None,
     global_bounds: dict = None

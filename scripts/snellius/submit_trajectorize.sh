@@ -43,7 +43,8 @@ uv run ais-shader trajectory compute /projects/prjs2131/data/marine-cadastre/ais
     --vessel-id-col mmsi \
     --time-col base_date_time \
     --shuffle-backend disk \
-    --n-partitions 256
+    --n-partitions 256 \
+    --partition-method spatiotemporal
 
 # 4. Clean up Dask cluster
 echo "Tearing down Dask cluster..."

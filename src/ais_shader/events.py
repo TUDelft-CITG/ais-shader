@@ -144,7 +144,10 @@ def detect_line_crossings(segments_gdf: gpd.GeoDataFrame, passage_lines_gdf: gpd
 
 
 def detect_polygon_entry_exit(
-    segments_gdf: gpd.GeoDataFrame, polygons_gdf: gpd.GeoDataFrame, polygon_id_col: str = "name"
+    segments_gdf: gpd.GeoDataFrame,
+    polygons_gdf: gpd.GeoDataFrame,
+    polygon_id_col: str = "name",
+    merge_gap_minutes: float = None,
 ) -> gpd.GeoDataFrame:
     """
     Detect vessel entry into (and potential exit from) polygon "event polygons".
@@ -164,6 +167,17 @@ def detect_polygon_entry_exit(
     (e.g. the AIS window ends while the vessel is still inside), or the
     entry and exit points together (2 points) otherwise. A trip may produce
     several separate events per polygon if it enters and exits more than once.
+
+    merge_gap_minutes : float, optional
+        AIS reception inside enclosed spaces like lock chambers is often
+        noisy: a vessel sitting still can flicker in and out of the polygon
+        boundary many times in a few minutes as fixes jitter, producing a
+        burst of short, spurious entry/exit pairs for what is really a
+        single visit. If set, consecutive events for the same (MMSI,
+        polygon) are merged whenever the gap between one event's exit_time
+        and the next event's entry_time is within this many minutes -- the
+        merged event keeps the first entry_time, the last exit_time, and the
+        union of constituent boundary-crossing points.
     """
     _require_columns(
         segments_gdf, SEGMENT_VESSEL_COLS + ['segment_start_time', 'segment_duration_s'], "segments_gdf"
@@ -225,6 +239,10 @@ def detect_polygon_entry_exit(
     data, geometry = _build_polygon_event_table(events, polygon_id_col)
     events_gdf = gpd.GeoDataFrame(data, geometry=geometry, crs="EPSG:4326")
     events_gdf = events_gdf.reset_index(drop=True)
+
+    if merge_gap_minutes is not None:
+        events_gdf = _merge_close_polygon_events(events_gdf, polygon_id_col, merge_gap_minutes)
+
     return events_gdf
 
 
@@ -291,13 +309,74 @@ def _build_polygon_event_table(events: list, polygon_id_col: str) -> tuple:
     return data, geometry
 
 
+def _merge_close_polygon_events(
+    events_gdf: gpd.GeoDataFrame, polygon_id_col: str, merge_gap_minutes: float
+) -> gpd.GeoDataFrame:
+    """Tie together consecutive same-vessel/same-polygon events separated by a short gap.
+
+    Repeated brief entry/exit flicker (e.g. AIS jitter in a lock chamber
+    while a vessel is actually sitting still) shows up as a run of
+    short-lived events for the same (MMSI, polygon) in quick succession.
+    Events are merged in chronological order whenever the previous event has
+    a known exit_time and the next event's entry_time follows within
+    merge_gap_minutes; an event left open (exit_time is NaT, e.g. the AIS
+    window ended while still inside) can't be compared to what follows, so it
+    always closes out the current merge run.
+    """
+    if events_gdf.empty:
+        return events_gdf
+
+    def _finalize(rec: dict) -> dict:
+        points = [rec.pop('_first_point')]
+        last_point = rec.pop('_last_point')
+        if pd.notna(rec['exit_time']):
+            points.append(last_point)
+        rec['geometry'] = MultiPoint(points)
+        return rec
+
+    gap = pd.Timedelta(minutes=merge_gap_minutes)
+    sortable = events_gdf.sort_values(['MMSI', polygon_id_col, 'entry_time'])
+
+    merged_records = []
+    current = None
+    for _, row in sortable.iterrows():
+        if (
+            current is not None
+            and row['MMSI'] == current['MMSI']
+            and row[polygon_id_col] == current[polygon_id_col]
+            and pd.notna(current['exit_time'])
+            and (row['entry_time'] - current['exit_time']) <= gap
+        ):
+            current['exit_time'] = row['exit_time']
+            current['_last_point'] = list(row['geometry'].geoms)[-1]
+        else:
+            if current is not None:
+                merged_records.append(_finalize(current))
+            current = row.to_dict()
+            row_points = list(row['geometry'].geoms)
+            current['_first_point'] = row_points[0]
+            current['_last_point'] = row_points[-1]
+    if current is not None:
+        merged_records.append(_finalize(current))
+
+    merged_gdf = gpd.GeoDataFrame(merged_records, columns=events_gdf.columns, crs=events_gdf.crs)
+    return merged_gdf.reset_index(drop=True)
+
+
+def _read_vector_file(path: Path) -> gpd.GeoDataFrame:
+    """Read a reference vector file, dispatching to gpd.read_parquet for (Geo)Parquet and gpd.read_file otherwise."""
+    if path.suffix.lower() in {".parquet", ".geoparquet"}:
+        return gpd.read_parquet(path)
+    return gpd.read_file(path)
+
+
 def run_line_crossing_detection(segments_file: Path, passage_file: Path, output_file: Path) -> None:
     """CLI/script entry point: detect_line_crossings, reading/writing GeoParquet/GeoJSON files."""
     logger.info(f"Loading segments from {segments_file}...")
     segments_gdf = gpd.read_parquet(segments_file)
 
     logger.info(f"Loading passage lines from {passage_file}...")
-    passage_lines_gdf = gpd.read_file(passage_file)
+    passage_lines_gdf = _read_vector_file(passage_file)
     if passage_lines_gdf.crs is None:
         passage_lines_gdf = passage_lines_gdf.set_crs("EPSG:4326")
 
@@ -311,19 +390,25 @@ def run_line_crossing_detection(segments_file: Path, passage_file: Path, output_
 
 
 def run_polygon_entry_exit_detection(
-    segments_file: Path, polygons_file: Path, output_file: Path, polygon_id_col: str = "name"
+    segments_file: Path,
+    polygons_file: Path,
+    output_file: Path,
+    polygon_id_col: str = "name",
+    merge_gap_minutes: float = None,
 ) -> None:
     """CLI/script entry point: detect_polygon_entry_exit, reading/writing GeoParquet/GeoJSON files."""
     logger.info(f"Loading segments from {segments_file}...")
     segments_gdf = gpd.read_parquet(segments_file)
 
     logger.info(f"Loading reference polygons from {polygons_file}...")
-    polygons_gdf = gpd.read_file(polygons_file)
+    polygons_gdf = _read_vector_file(polygons_file)
     if polygons_gdf.crs is None:
         polygons_gdf = polygons_gdf.set_crs("EPSG:4326")
 
     logger.info("Detecting polygon entry/exit events...")
-    events_gdf = detect_polygon_entry_exit(segments_gdf, polygons_gdf, polygon_id_col=polygon_id_col)
+    events_gdf = detect_polygon_entry_exit(
+        segments_gdf, polygons_gdf, polygon_id_col=polygon_id_col, merge_gap_minutes=merge_gap_minutes
+    )
     logger.info(f"Found {len(events_gdf):,} events.")
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
