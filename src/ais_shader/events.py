@@ -34,7 +34,7 @@ def _require_columns(gdf: gpd.GeoDataFrame, columns: list, label: str) -> None:
 def _to_crs_3857(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     if gdf.crs is None:
         gdf = gdf.set_crs("EPSG:4326")
-    return gdf.to_crs("EPSG:3857") if gdf.crs.to_string() != "EPSG:3857" else gdf
+    return gdf if gdf.crs.to_epsg() == 3857 else gdf.to_crs("EPSG:3857")
 
 
 def _segment_start_end_coords(geoms: np.ndarray) -> tuple:
@@ -50,15 +50,14 @@ def _crossing_point_and_fraction(seg_geom, ref_geom) -> tuple:
     124-134): a straight 2-point segment against a straight reference line
     normally intersects at a single Point, but defensively falls back to the
     centroid for the rare non-Point result (e.g. the segment grazing a
-    polygon corner).
+    polygon corner). Callers only invoke this on segments already known to
+    intersect ref_geom (via an `intersects` sjoin), so an empty intersection
+    here indicates a bug rather than a real geometric case.
     """
     isect = seg_geom.intersection(ref_geom)
     if isect.is_empty:
-        point = Point(seg_geom.coords[0])
-    elif isinstance(isect, Point):
-        point = isect
-    else:
-        point = isect.centroid
+        raise ValueError(f"Segment {seg_geom.wkt} does not intersect reference geometry {ref_geom.wkt}")
+    point = isect if isinstance(isect, Point) else isect.centroid
     f_seg = seg_geom.project(point, normalized=True)
     return point, f_seg
 
@@ -115,6 +114,12 @@ def detect_line_crossings(segments_gdf: gpd.GeoDataFrame, passage_lines_gdf: gpd
         f_segs.append(f_seg)
     f_seg_arr = np.array(f_segs, dtype=float)
 
+    # Classify crossing direction via the sign of the cross product between
+    # the segment's own vector (S) and each passage line's start->end vector
+    # (L): rotating L by -90 degrees gives its right-hand normal, and the dot
+    # of S with that normal is >=0 when the segment crosses left-to-right of
+    # L's direction ('down'), negative when right-to-left ('up'). This is the
+    # same normal-vector convention process_partition uses in analysis.py.
     starts, ends = _segment_start_end_coords(seg_geoms)
     S_x, S_y = ends[:, 0] - starts[:, 0], ends[:, 1] - starts[:, 1]
     L_x_val = passage_lines_3857['L_x'].loc[joined['index_right']].values
@@ -122,9 +127,9 @@ def detect_line_crossings(segments_gdf: gpd.GeoDataFrame, passage_lines_gdf: gpd
     dot_product = S_x * (-L_y_val) + S_y * L_x_val
     direction = np.where(dot_product >= 0, 'down', 'up')
 
-    event_time = _interpolate_time(
-        pd.to_datetime(joined['segment_start_time'].values), joined['segment_duration_s'].values, f_seg_arr
-    )
+    segment_start_time = pd.to_datetime(joined['segment_start_time'].values)
+    segment_duration_s = joined['segment_duration_s'].values
+    event_time = _interpolate_time(segment_start_time, segment_duration_s, f_seg_arr)
 
     points_4326 = gpd.GeoSeries(points_3857, crs="EPSG:3857").to_crs("EPSG:4326")
     geometry = [MultiPoint([pt]) for pt in points_4326]
@@ -133,7 +138,9 @@ def detect_line_crossings(segments_gdf: gpd.GeoDataFrame, passage_lines_gdf: gpd
     data['PassageId'] = joined['PassageId'].values
     data['direction'] = direction
     data['event_time'] = event_time
-    return gpd.GeoDataFrame(data, geometry=geometry, crs="EPSG:4326").reset_index(drop=True)
+    events_gdf = gpd.GeoDataFrame(data, geometry=geometry, crs="EPSG:4326")
+    events_gdf = events_gdf.reset_index(drop=True)
+    return events_gdf
 
 
 def detect_polygon_entry_exit(
@@ -204,14 +211,29 @@ def detect_polygon_entry_exit(
         points_3857.append(point)
         f_segs.append(f_seg)
     transitions['_point_3857'] = points_3857
-    transitions['_event_time'] = _interpolate_time(
-        pd.to_datetime(transitions['segment_start_time'].values),
-        transitions['segment_duration_s'].values,
-        np.array(f_segs, dtype=float),
-    )
+    transitions_start_time = pd.to_datetime(transitions['segment_start_time'].values)
+    transitions_duration_s = transitions['segment_duration_s'].values
+    f_seg_arr = np.array(f_segs, dtype=float)
+    transitions['_event_time'] = _interpolate_time(transitions_start_time, transitions_duration_s, f_seg_arr)
     transitions['_is_entry'] = ~transitions['_start_inside'] & transitions['_end_inside']
     transitions = transitions.sort_values(['_polygon_key', 'trip_id', 'segment_start_time'])
 
+    events = _pair_polygon_transitions(transitions)
+    if not events:
+        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+
+    data, geometry = _build_polygon_event_table(events, polygon_id_col)
+    events_gdf = gpd.GeoDataFrame(data, geometry=geometry, crs="EPSG:4326")
+    events_gdf = events_gdf.reset_index(drop=True)
+    return events_gdf
+
+
+def _pair_polygon_transitions(transitions: pd.DataFrame) -> list:
+    """Pair each entry transition with the next matching exit for the same (polygon, trip).
+
+    transitions must be sorted by (_polygon_key, trip_id, segment_start_time)
+    and carry the _is_entry/_point_3857/_event_time columns computed above.
+    """
     events = []
     open_entry = None
     for _, row in transitions.iterrows():
@@ -231,16 +253,28 @@ def detect_polygon_entry_exit(
             if open_entry is not None and open_entry['key'] == key:
                 events.append(_finish_polygon_event(open_entry, exit_row=row))
                 open_entry = None
-            # An exit with no open entry means the trip started already
-            # inside the polygon (no earlier segment to detect entry from) --
-            # nothing to pair it with, so it's dropped.
+            else:
+                # An exit with no open entry means the trip started already
+                # inside the polygon (no earlier segment to detect entry from) --
+                # nothing to pair it with, so it's dropped.
+                pass
 
     if open_entry is not None:
         events.append(_finish_polygon_event(open_entry, exit_row=None))
 
-    if not events:
-        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+    return events
 
+
+def _finish_polygon_event(open_entry: dict, exit_row) -> tuple:
+    entry_row = open_entry['row']
+    points_3857 = [entry_row['_point_3857']]
+    if exit_row is not None:
+        points_3857.append(exit_row['_point_3857'])
+    return entry_row, exit_row, points_3857
+
+
+def _build_polygon_event_table(events: list, polygon_id_col: str) -> tuple:
+    """Flatten (entry_row, exit_row, points_3857) events into GeoDataFrame data + geometry columns."""
     data = {col: [] for col in SEGMENT_VESSEL_COLS}
     data[polygon_id_col] = []
     data['entry_time'] = []
@@ -254,16 +288,7 @@ def detect_polygon_entry_exit(
         data['exit_time'].append(exit_row['_event_time'] if exit_row is not None else pd.NaT)
         points_4326 = gpd.GeoSeries(points_3857_pair, crs="EPSG:3857").to_crs("EPSG:4326")
         geometry.append(MultiPoint(list(points_4326)))
-
-    return gpd.GeoDataFrame(data, geometry=geometry, crs="EPSG:4326").reset_index(drop=True)
-
-
-def _finish_polygon_event(open_entry: dict, exit_row) -> tuple:
-    entry_row = open_entry['row']
-    points_3857 = [entry_row['_point_3857']]
-    if exit_row is not None:
-        points_3857.append(exit_row['_point_3857'])
-    return entry_row, exit_row, points_3857
+    return data, geometry
 
 
 def run_line_crossing_detection(segments_file: Path, passage_file: Path, output_file: Path) -> None:

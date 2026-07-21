@@ -56,8 +56,6 @@ def test_passage_crossing():
     v2_speed = v2_res.iloc[0]['speed']
     assert abs(v2_speed - 20.0) < 0.1, f"Expected speed ~20.0, got {v2_speed}"
 
-    print("test_passage_crossing with directionality PASSED!")
-
 
 if __name__ == "__main__":
     test_passage_crossing()
