@@ -24,18 +24,30 @@ def find_zip_password(input_file: Path) -> str:
     """Resolve the password for an encrypted zip archive.
 
     Looks for a ``.env`` file next to input_file (without overriding
-    already-exported variables), then returns the value of the first
-    environment variable whose name ends in "PASSWORD" (case-insensitive) --
-    the RWS dataset uses e.g. AHOD_PASSWORD, other datasets may use a
-    different prefix.
+    already-exported variables), then returns the value of ``ZIP_PASSWORD``
+    if set, otherwise falls back to a single environment variable whose name
+    ends in "PASSWORD" (case-insensitive) -- different datasets may use
+    different prefixes, e.g. RWS_PASSWORD. If more than one such variable
+    is set, the prefix is ambiguous, so this raises rather than silently
+    picking one.
     """
     load_dotenv(input_file.parent / ".env", override=False)
-    for key, value in os.environ.items():
-        if key.upper().endswith("PASSWORD"):
-            return value
+
+    if "ZIP_PASSWORD" in os.environ:
+        return os.environ["ZIP_PASSWORD"]
+
+    candidates = {key: value for key, value in os.environ.items() if key.upper().endswith("PASSWORD")}
+    if len(candidates) == 1:
+        return next(iter(candidates.values()))
+    if len(candidates) > 1:
+        raise ValueError(
+            f"'{input_file}' is an encrypted zip archive, and multiple environment "
+            f"variables ending in PASSWORD were found ({', '.join(sorted(candidates))}); "
+            f"set ZIP_PASSWORD explicitly to disambiguate."
+        )
     raise ValueError(
         f"'{input_file}' is an encrypted zip archive, but no environment "
-        f"variable ending in PASSWORD was found (checked "
+        f"variable named ZIP_PASSWORD (or ending in PASSWORD) was found (checked "
         f"{input_file.parent / '.env'} and the current environment)."
     )
 

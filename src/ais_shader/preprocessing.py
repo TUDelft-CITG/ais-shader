@@ -351,9 +351,9 @@ comfortably above ~300MB per batch, measured against realistic
 "aggregated"-profile rows (the heaviest, with imo/name/callsign columns)."""
 
 
-def _is_aggregated_profile(row: dict) -> bool:
+def _has_identification_block(row: dict) -> bool:
     """True if row carries the "aggregated" profile's data.identification block (see flatten_row)."""
-    return isinstance(row.get('data'), dict) and isinstance(row['data'].get('identification'), dict)
+    return isinstance(row.get('data', {}).get('identification'), dict)
 
 
 def _flush_batch(batch: list, output_file: Path, batch_idx: int, progress: tqdm) -> int:
@@ -387,7 +387,7 @@ def run_ndjson_conversion_streaming(input_file: Path, output_file: Path, passwor
         for line in iter_zip_member_lines(input_file, password=password):
             row = json.loads(line)
             if include_identification is None:
-                include_identification = _is_aggregated_profile(row)
+                include_identification = _has_identification_block(row)
 
             batch.append(flatten_row(row, include_identification=include_identification))
             progress.update(1)
@@ -579,15 +579,18 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
 
     try:
         logger.info(f"Reading NDJSON from {input_file} using Dask Bag...")
-        text_bag = db.read_text(str(input_file), compression="infer", blocksize="64MB")
+        text_bag = db.read_text(str(input_file), compression="infer", blocksize="64MB").filter(
+            lambda line: line.strip()
+        )
 
         # Peek at the first record to detect the "aggregated" profile
         # (nested under "data", carrying an identification block), so the
         # dataframe schema stays uniform across every row in this file.
-        first_record = json.loads(text_bag.take(1)[0])
-        include_identification = isinstance(first_record.get('data'), dict) and isinstance(
-            first_record['data'].get('identification'), dict
-        )
+        first_lines = text_bag.take(1)
+        if not first_lines:
+            raise ValueError(f"'{input_file}' contains no NDJSON records.")
+        first_record = json.loads(first_lines[0])
+        include_identification = _has_identification_block(first_record)
 
         bag = text_bag.map(json.loads).map(
             functools.partial(flatten_row, include_identification=include_identification)
