@@ -371,5 +371,5 @@ def run_passage_analysis(
     segments_output_file = output_file.parent / f"{output_file.stem}_bin_segments.geojson"
     logger.info(f"Saving bin segments results to {segments_output_file}...")
     stats_gdf_4326.to_file(segments_output_file, driver="GeoJSON")
-    
+
     logger.info("Analysis and segment generation complete!")
