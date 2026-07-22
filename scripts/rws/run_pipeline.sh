@@ -41,7 +41,7 @@ process_month() {
     # dask-geopandas spatial partitioning (useful for pruning partitions across
     # a country-scale extent) is pure overhead here.
     uv run ais-shader preprocess \
-        --input-file "$DATASET_DIR/year=$year/month=$month" \
+        "$DATASET_DIR/year=$year/month=$month" \
         --output-file "$INTERMEDIATE_DIR/${tag}_preprocessed.geoparquet" \
         --no-spatial-index
 
@@ -52,12 +52,16 @@ process_month() {
         --output-file "$INTERMEDIATE_DIR/${tag}_cleaned.geoparquet"
 
     # Stage 3: Trajectorize
+    # --exclude-moored: RWS river traffic includes many permanently moored
+    # vessels whose GPS jitter (position noise while stationary) otherwise
+    # gets split into thousands of spurious short trips.
     uv run ais-shader trajectory compute \
         "$INTERMEDIATE_DIR/${tag}_cleaned.geoparquet" \
         --vessel-id-col "$VESSEL_ID_COL" \
         --time-col "$TIME_COL" \
         --partition-method vessel \
-        --gap-threshold-hours 0.0833333 \
+        --gap-threshold-hours 0.1666666 \
+        --exclude-moored \
         --output-file "$INTERMEDIATE_DIR/${tag}_trajectorized.geoparquet"
 
     # Stage 4: Generate Segments
@@ -76,7 +80,7 @@ process_month() {
 
     # Stage 5: Preprocess Segments
     uv run ais-shader preprocess \
-        --input-file "$INTERMEDIATE_DIR/${tag}_segments.geoparquet" \
+        "$INTERMEDIATE_DIR/${tag}_segments.geoparquet" \
         --output-file "$INTERMEDIATE_DIR/${tag}_segments_preprocessed.geoparquet" \
         --no-spatial-index
 

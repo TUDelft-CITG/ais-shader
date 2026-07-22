@@ -121,17 +121,16 @@ def postprocess(run_dir, base_zoom, scheduler, clean_intermediate, cogs, config_
     run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs, config_file)
 
 @cli.command()
-@click.option(
-    "--input-file",
+@click.argument(
+    "input-file",
     type=click.Path(exists=True, path_type=Path),
-    default=Path("/Users/baart_f/data/ais/AISVesselTracks2023.parquet"),
-    help="Path to input Parquet file.",
 )
 @click.option(
     "--output-file",
+    "-o",
     type=click.Path(path_type=Path),
-    default=Path("/Users/baart_f/data/ais/AISVesselTracks2023_processed.parquet"),
-    help="Path to output processed Parquet file.",
+    default=None,
+    help="Path to output processed Parquet file. Defaults to input file name with -processed.geoparquet extension.",
 )
 @click.option(
     "--partitions",
@@ -156,6 +155,7 @@ def preprocess(input_file, output_file, partitions, scheduler, spatial_index):
     """
     Preprocess AIS data (GeoParquet/GPKG -> Reproject -> Spatial Partition).
     """
+    output_file = output_file or _default_output_path(input_file, "-processed.parquet")
     run_preprocessing(input_file, output_file, partitions, scheduler, spatial_index)
 
 @click.group(name="convert")
@@ -399,7 +399,7 @@ def filter_outliers(input_file, output_file, config_file):
 @click.option(
     "--partition-method",
     type=click.Choice(["vessel", "spatiotemporal"]),
-    default="spatiotemporal",
+    default="vessel",
     help="Partitioning method to use.",
 )
 @click.option(
@@ -414,7 +414,20 @@ def filter_outliers(input_file, output_file, config_file):
     default=False,
     help="Represent timestamps as epoch-relative times (projected to 1970-01-01).",
 )
-def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions, input_crs, gap_threshold_hours, partition_method, hilbert_p, epoch_time):
+@click.option(
+    "--exclude-moored",
+    is_flag=True,
+    default=False,
+    help="Drop points with AIS navigational status 'moored' (code 5) before segmentation. "
+         "Off by default; moored vessels otherwise generate many spurious short trips from GPS jitter.",
+)
+@click.option(
+    "--status-col",
+    type=str,
+    default="status",
+    help="Navigational status column name, used with --exclude-moored.",
+)
+def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, scheduler, shuffle_backend, n_partitions, input_crs, gap_threshold_hours, partition_method, hilbert_p, epoch_time, exclude_moored, status_col):
     """
     Voyage segmentation and feature engineering on Dask.
     """
@@ -446,6 +459,14 @@ def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, sche
 
         # Drop empty coordinates immediately so they don't distort spatial partitioning/Hilbert divisions
         ddf = ddf.dropna(subset=[x_col, y_col])
+
+        if exclude_moored:
+            if status_col not in ddf.columns:
+                raise click.ClickException(
+                    f"--exclude-moored requires a '{status_col}' column, which was not found in the input."
+                )
+            logger.info(f"Excluding moored points (status column '{status_col}' == '5')...")
+            ddf = ddf[ddf[status_col].astype(str) != "5"]
 
         # Run pipeline
         res_ddf = trajectorize_dataframe(
@@ -594,18 +615,25 @@ def line_crossings(input_file, passage_file, output_file):
     help="Property in --polygons-file identifying each polygon.",
 )
 @click.option(
+    "--merge-gap-minutes",
+    type=float,
+    default=None,
+    help="Tie together consecutive entry/exit events for the same vessel and polygon when separated by a gap "
+         "shorter than this many minutes (e.g. AIS flicker in a lock chamber). Off by default.",
+)
+@click.option(
     "--output-file",
     "-o",
     type=click.Path(path_type=Path),
     default=None,
     help="Path to output GeoParquet file. Defaults to input file name with -polygon-events.geoparquet extension.",
 )
-def polygon_entry_exit(input_file, polygons_file, polygon_id_col, output_file):
+def polygon_entry_exit(input_file, polygons_file, polygon_id_col, merge_gap_minutes, output_file):
     """
     Detect vessel entry into (and exit from) reference polygons.
     """
     output_file = output_file or _default_output_path(input_file, "-polygon-events.geoparquet")
-    run_polygon_entry_exit_detection(input_file, polygons_file, output_file, polygon_id_col)
+    run_polygon_entry_exit_detection(input_file, polygons_file, output_file, polygon_id_col, merge_gap_minutes)
 
 
 # Register trajectory commands

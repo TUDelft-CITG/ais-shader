@@ -96,17 +96,18 @@ Convert the raw AIS data (WKB Parquet or GPKG) into a spatially partitioned GeoP
 
 **From Parquet:**
 ```bash
-uv run preprocess.py --input-file /path/to/raw.geoparquet --output-file /path/to/processed.geoparquet
+uv run preprocess.py /path/to/raw.geoparquet
 ```
+*(Defaults to `/path/to/raw-processed.parquet`; pass `--output-file` to override.)*
 
 **From GPKG:**
 ```bash
-uv run preprocess.py --input-file /path/to/data.gpkg --output-file /path/to/processed.geoparquet
+uv run preprocess.py /path/to/data.gpkg
 ```
 *Note: GPKG conversion via Python can be slow. For faster results, use `ogr2ogr` first:*
 ```bash
 ogr2ogr -f Parquet -t_srs EPSG:3857 raw.geoparquet input.gpkg
-uv run preprocess.py --input-file raw.geoparquet --output-file processed.geoparquet
+uv run preprocess.py raw.geoparquet
 ```
 
 ### 1.5. Trajectory Processing (Voyage Segmentation & Feature Engineering)
