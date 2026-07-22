@@ -176,8 +176,8 @@ def detect_polygon_entry_exit(
         single visit. If set, consecutive events for the same (MMSI,
         polygon) are merged whenever the gap between one event's exit_time
         and the next event's entry_time is within this many minutes -- the
-        merged event keeps the first entry_time, the last exit_time, and the
-        union of constituent boundary-crossing points.
+        merged event keeps the first entry_time, the last exit_time, the
+        entry point of the first visit, and the exit point of the last visit.
     """
     _require_columns(
         segments_gdf, SEGMENT_VESSEL_COLS + ['segment_start_time', 'segment_duration_s'], "segments_gdf"

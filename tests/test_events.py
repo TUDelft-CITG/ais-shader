@@ -93,6 +93,50 @@ def test_detect_polygon_entry_exit():
     assert len(b.geometry.geoms) == 1
 
 
+def test_detect_polygon_entry_exit_merge_gap():
+    polygon_gdf = gpd.GeoDataFrame(
+        {'name': ['test-polygon']},
+        geometry=[Polygon([(0.0, 0.0), (0.0, 0.1), (0.1, 0.1), (0.1, 0.0)])],
+        crs="EPSG:4326"
+    )
+
+    # Vessel enters, exits, re-enters 3 minutes later, exits, re-enters 15 minutes later.
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            # Visit 1: Entry 10:05, Exit 10:16
+            _make_segment('111', 'shipA_1', (-0.05, 0.05), (0.05, 0.05), '2026-06-14 10:00:00', 600),
+            _make_segment('111', 'shipA_1', (0.06, 0.05), (0.16, 0.05), '2026-06-14 10:12:00', 600),
+            # Visit 2: Gap of 3 mins (Exit 10:16 to Entry 10:19). Entry 10:19, Exit 10:24
+            _make_segment('111', 'shipA_2', (0.15, 0.05), (0.05, 0.05), '2026-06-14 10:18:00', 300),
+            _make_segment('111', 'shipA_2', (0.05, 0.05), (-0.05, 0.05), '2026-06-14 10:23:00', 300),
+            # Visit 3: Gap of 16 mins (Exit 10:24 to Entry 10:40). Entry 10:40, Exit 10:46
+            _make_segment('111', 'shipA_3', (-0.05, 0.05), (0.05, 0.05), '2026-06-14 10:35:00', 600),
+            _make_segment('111', 'shipA_3', (0.06, 0.05), (0.16, 0.05), '2026-06-14 10:42:00', 600),
+        ],
+        crs="EPSG:4326"
+    )
+
+    # Without merging: 3 events
+    unmerged = detect_polygon_entry_exit(segments_gdf, polygon_gdf)
+    assert len(unmerged) == 3
+
+    # With merge_gap_minutes=5.0: Visit 1 & 2 merge (3 min gap <= 5 min), Visit 3 remains separate (16 min gap > 5 min)
+    merged = detect_polygon_entry_exit(segments_gdf, polygon_gdf, merge_gap_minutes=5.0)
+    assert len(merged) == 2
+
+    e1 = merged.iloc[0]
+    # First merged event spans Visit 1 entry to Visit 2 exit
+    assert abs(e1['entry_time'] - pd.Timestamp('2026-06-14 10:05:00')) < pd.Timedelta(seconds=1)
+    assert abs(e1['exit_time'] - pd.Timestamp('2026-06-14 10:25:30')) < pd.Timedelta(seconds=1)
+    assert len(e1.geometry.geoms) == 2
+
+    e2 = merged.iloc[1]
+    assert abs(e2['entry_time'] - pd.Timestamp('2026-06-14 10:40:00')) < pd.Timedelta(seconds=1)
+    assert abs(e2['exit_time'] - pd.Timestamp('2026-06-14 10:46:00')) < pd.Timedelta(seconds=1)
+
+
 if __name__ == "__main__":
     test_detect_line_crossings()
     test_detect_polygon_entry_exit()
+    test_detect_polygon_entry_exit_merge_gap()
+

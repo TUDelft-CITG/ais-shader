@@ -130,7 +130,7 @@ def postprocess(run_dir, base_zoom, scheduler, clean_intermediate, cogs, config_
     "-o",
     type=click.Path(path_type=Path),
     default=None,
-    help="Path to output processed Parquet file. Defaults to input file name with -processed.parquet extension.",
+    help="Path to output processed Parquet file. Defaults to input file name with -processed.geoparquet extension.",
 )
 @click.option(
     "--partitions",
