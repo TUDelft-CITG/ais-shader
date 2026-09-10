@@ -1,7 +1,14 @@
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import LineString, Polygon
-from ais_shader.events import detect_line_crossings, detect_polygon_entry_exit
+from ais_shader.events import (
+    detect_line_crossings,
+    detect_polygon_entry_exit,
+    detect_encounters,
+    compute_segment_cpa,
+    classify_encounter,
+    generate_encounter_timeseries,
+)
 
 SEGMENT_VESSEL_DEFAULTS = {
     'VesselType': '70', 'VesselGroup': 'Cargo', 'Length': 100.0, 'Width': 20.0, 'Draft': 5.0, 'speed_mps': 5.0
@@ -135,8 +142,179 @@ def test_detect_polygon_entry_exit_merge_gap():
     assert abs(e2['exit_time'] - pd.Timestamp('2026-06-14 10:46:00')) < pd.Timedelta(seconds=1)
 
 
-if __name__ == "__main__":
-    test_detect_line_crossings()
-    test_detect_polygon_entry_exit()
-    test_detect_polygon_entry_exit_merge_gap()
+def test_classify_encounter():
+    assert classify_encounter(0.0, 180.0) == 'head-on'
+    assert classify_encounter(10.0, 170.0) == 'head-on'
+    assert classify_encounter(90.0, 95.0) == 'overtaking'
+    assert classify_encounter(5.0, 355.0) == 'overtaking'
+    assert classify_encounter(0.0, 90.0) == 'crossing'
+    assert classify_encounter(45.0, 135.0) == 'crossing'
+    assert classify_encounter(0.0, 0.0, speed1=0.1, speed2=0.1) == 'stationary'
+
+
+def test_compute_segment_cpa():
+    import numpy as np
+    # Vessel 1 moves North from (0, 0) to (0, 1000) over 100s (speed 10 m/s)
+    # Vessel 2 moves South from (100, 1000) to (100, 0) over 100s (speed 10 m/s)
+    t0 = pd.Timestamp('2026-06-14 12:00:00')
+    t1 = pd.Timestamp('2026-06-14 12:01:40')
+    res = compute_segment_cpa(
+        np.array([0.0, 0.0]), np.array([0.0, 1000.0]), t0, t1,
+        np.array([100.0, 1000.0]), np.array([100.0, 0.0]), t0, t1,
+    )
+    assert res is not None
+    cpa_dist, cpa_time, p1_cpa, p2_cpa, mid_cpa, h1, h2, sp1, sp2, enc_type, ds_start, ds_end, dv_along = res
+    assert abs(cpa_dist - 100.0) < 1e-4
+    assert abs(cpa_time - pd.Timestamp('2026-06-14 12:00:50')) < pd.Timedelta(seconds=1)
+    assert enc_type == 'head-on'
+    assert abs(mid_cpa[0] - 50.0) < 1e-4
+    assert abs(mid_cpa[1] - 500.0) < 1e-4
+
+
+def test_detect_encounters_head_on():
+    # 2 vessels traveling in opposite directions along a channel (close in space & time)
+    # Coordinates in EPSG:4326 around longitude 0, latitude 50
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            # Ship 1: moving North
+            _make_segment('111', 'ship1', (0.0, 50.0), (0.0, 50.01), '2026-06-14 12:00:00', 600, sog=10.0),
+            # Ship 2: moving South
+            _make_segment('222', 'ship2', (0.001, 50.01), (0.001, 50.0), '2026-06-14 12:00:00', 600, sog=10.0),
+        ],
+        crs="EPSG:4326"
+    )
+
+    encounters = detect_encounters(segments_gdf, max_distance_m=500.0)
+    assert len(encounters) == 1
+    enc = encounters.iloc[0]
+    assert enc['mmsi_1'] == '111'
+    assert enc['mmsi_2'] == '222'
+    assert enc['encounter_type'] == 'head-on'
+    assert enc['min_distance_m'] < 200.0
+    assert abs(enc['cpa_time'] - pd.Timestamp('2026-06-14 12:05:00')) < pd.Timedelta(seconds=2)
+
+
+def test_detect_encounters_overtaking():
+    # Ship 1 faster, overtaking Ship 2 traveling in the same direction
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            # Ship 1: faster (0.0 -> 0.02)
+            _make_segment('111', 'ship1', (0.0, 50.0), (0.0, 50.02), '2026-06-14 12:00:00', 600, sog=20.0),
+            # Ship 2: slower (0.005 -> 0.015)
+            _make_segment('222', 'ship2', (0.0005, 50.005), (0.0005, 50.015), '2026-06-14 12:00:00', 600, sog=10.0),
+        ],
+        crs="EPSG:4326"
+    )
+
+    encounters = detect_encounters(segments_gdf, max_distance_m=500.0)
+    assert len(encounters) == 1
+    enc = encounters.iloc[0]
+    assert enc['encounter_type'] == 'overtaking'
+    assert enc['overtaking_mmsi'] == '111'
+    assert enc['overtaken_mmsi'] == '222'
+    assert enc['min_distance_m'] < 200.0
+
+
+def test_detect_encounters_parallel_sailing():
+    # Two ships cruising side-by-side at the exact same speed (co-sailing/convoy, no passing)
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            # Ship 1: (0.0 -> 0.01) at 10 knots
+            _make_segment('111', 'ship1', (0.0, 50.0), (0.0, 50.01), '2026-06-14 12:00:00', 600, sog=10.0),
+            # Ship 2: (0.0005 -> 0.0105) alongside at identical speed
+            _make_segment('222', 'ship2', (0.0005, 50.0), (0.0005, 50.01), '2026-06-14 12:00:00', 600, sog=10.0),
+        ],
+        crs="EPSG:4326"
+    )
+
+    encounters = detect_encounters(segments_gdf, max_distance_m=500.0)
+    assert len(encounters) == 1
+    enc = encounters.iloc[0]
+    assert enc['encounter_type'] == 'parallel_sailing'
+    assert enc['overtaking_mmsi'] is None
+    assert enc['overtaken_mmsi'] is None
+
+
+
+def test_detect_encounters_spatial_filtering():
+    # Vessels at the same time, but spatially far apart (~100km)
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            _make_segment('111', 'ship1', (0.0, 50.0), (0.0, 50.01), '2026-06-14 12:00:00', 600),
+            _make_segment('222', 'ship2', (1.0, 50.0), (1.0, 50.01), '2026-06-14 12:00:00', 600),
+        ],
+        crs="EPSG:4326"
+    )
+    encounters = detect_encounters(segments_gdf, max_distance_m=500.0)
+    assert len(encounters) == 0
+
+
+def test_detect_encounters_temporal_filtering():
+    # Vessels on the exact same line, but 5 hours apart
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            _make_segment('111', 'ship1', (0.0, 50.0), (0.0, 50.01), '2026-06-14 10:00:00', 600),
+            _make_segment('222', 'ship2', (0.0, 50.01), (0.0, 50.0), '2026-06-14 15:00:00', 600),
+        ],
+        crs="EPSG:4326"
+    )
+    encounters = detect_encounters(segments_gdf, max_distance_m=500.0)
+    assert len(encounters) == 0
+
+
+def test_detect_encounters_merge_consecutive():
+    # 2 vessels traveling alongside each other over 2 consecutive segments
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            # Seg 1: 12:00 - 12:05
+            _make_segment('111', 'ship1', (0.0, 50.0), (0.0, 50.005), '2026-06-14 12:00:00', 300),
+            _make_segment('222', 'ship2', (0.0005, 50.0), (0.0005, 50.005), '2026-06-14 12:00:00', 300),
+            # Seg 2: 12:05 - 12:10 (gap = 0 min)
+            _make_segment('111', 'ship1', (0.0, 50.005), (0.0, 50.01), '2026-06-14 12:05:00', 300),
+            _make_segment('222', 'ship2', (0.0005, 50.005), (0.0005, 50.01), '2026-06-14 12:05:00', 300),
+        ],
+        crs="EPSG:4326"
+    )
+
+    # Without merge: 2 proximity segments
+    raw = detect_encounters(segments_gdf, max_distance_m=500.0, merge_gap_minutes=None)
+    assert len(raw) == 2
+
+    # With merge: 1 single merged encounter covering 12:00 - 12:10
+    merged = detect_encounters(segments_gdf, max_distance_m=500.0, merge_gap_minutes=10.0)
+    assert len(merged) == 1
+    m = merged.iloc[0]
+    assert m['start_time'] == pd.Timestamp('2026-06-14 12:00:00')
+    assert m['end_time'] == pd.Timestamp('2026-06-14 12:10:00')
+
+
+def test_generate_encounter_timeseries():
+    # 2 vessels: Ship 1 moving North (0.0, 50.0) -> (0.0, 50.01) from 12:00:00 to 12:10:00 (600s)
+    #            Ship 2 moving South (0.001, 50.01) -> (0.001, 50.0) from 12:00:00 to 12:10:00 (600s)
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            _make_segment('111', 'ship1', (0.0, 50.0), (0.0, 50.01), '2026-06-14 12:00:00', 600, sog=10.0),
+            _make_segment('222', 'ship2', (0.001, 50.01), (0.001, 50.0), '2026-06-14 12:00:00', 600, sog=10.0),
+        ],
+        crs="EPSG:4326"
+    )
+
+    encounters = detect_encounters(segments_gdf, max_distance_m=500.0)
+    assert len(encounters) == 1
+    assert encounters.iloc[0]['encounter_id'] == 0
+
+    # Generate time series sampled every 60s
+    ts_gdf = generate_encounter_timeseries(segments_gdf, encounters, step_seconds=60.0)
+    assert not ts_gdf.empty
+    assert len(ts_gdf) >= 11
+    assert 'geometry' in ts_gdf.columns
+    assert ts_gdf.geometry.geom_type.unique().tolist() == ['LineString']
+    assert all(ts_gdf['encounter_id'] == 0)
+    assert any(ts_gdf['is_cpa'])
+
+    # Check that distance is lowest at CPA
+    cpa_row = ts_gdf[ts_gdf['is_cpa']].iloc[0]
+    assert cpa_row['distance_m'] <= ts_gdf['distance_m'].min() + 0.1
+
+
 

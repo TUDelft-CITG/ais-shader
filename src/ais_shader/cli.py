@@ -13,7 +13,7 @@ from .renderer import run_rendering
 from .postprocessing import run_post_processing
 from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_csv_conversion, run_linestring_generation, run_segment_generation, run_outlier_filtering, normalize_to_epoch
 from .analysis import run_passage_analysis
-from .events import run_line_crossing_detection, run_polygon_entry_exit_detection
+from .events import run_line_crossing_detection, run_polygon_entry_exit_detection, run_encounter_detection
 from .data_loader import detect_hive_partitioning
 from .moving_dask.trajectory import trajectorize_dataframe
 
@@ -634,6 +634,80 @@ def polygon_entry_exit(input_file, polygons_file, polygon_id_col, merge_gap_minu
     """
     output_file = output_file or _default_output_path(input_file, "-polygon-events.geoparquet")
     run_polygon_entry_exit_detection(input_file, polygons_file, output_file, polygon_id_col, merge_gap_minutes)
+
+
+@events.command(name="encounters")
+@click.argument(
+    "input-file",
+    type=click.Path(exists=True, path_type=Path),
+)
+@click.option(
+    "--max-distance",
+    type=float,
+    default=500.0,
+    help="Maximum distance in meters between vessels at closest approach (default: 500m).",
+)
+@click.option(
+    "--time-bin-minutes",
+    type=float,
+    default=60.0,
+    help="Width of temporal index partitioning window in minutes (default: 60 min).",
+)
+@click.option(
+    "--merge-gap-minutes",
+    type=float,
+    default=10.0,
+    help="Merge consecutive proximity alerts between the same vessel pair separated by less than this many minutes (default: 10 min). Set to 0 to disable.",
+)
+@click.option(
+    "--fairway-markers",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to river mile markers GeoPackage/GeoJSON/shapefile for fairway-aligned coordinate modeling and bend-invariant encounter detection.",
+)
+@click.option(
+    "--river-name",
+    type=str,
+    default="MISSISSIPPI-LO",
+    help="River name filter when loading from multi-river mile markers dataset (default: 'MISSISSIPPI-LO').",
+)
+@click.option(
+    "--timeseries-file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional path to output GeoParquet/GeoJSON file for dynamic encounter connecting lines time series.",
+)
+@click.option(
+    "--timeseries-step",
+    type=float,
+    default=30.0,
+    help="Temporal sampling interval in seconds for encounter time series (default: 30s).",
+)
+@click.option(
+    "--output-file",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to output GeoParquet file. Defaults to input file name with -encounters.geoparquet extension.",
+)
+def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fairway_markers, river_name, timeseries_file, timeseries_step, output_file):
+    """
+    Detect vessel encounters (crossings, overtakings, head-on meetings) from a segment table.
+    """
+    output_file = output_file or _default_output_path(input_file, "-encounters.geoparquet")
+    gap = merge_gap_minutes if merge_gap_minutes > 0 else None
+    run_encounter_detection(
+        input_file,
+        output_file,
+        max_distance_m=max_distance,
+        time_bin_minutes=time_bin_minutes,
+        merge_gap_minutes=gap,
+        fairway_axis=fairway_markers,
+        river_name=river_name,
+        timeseries_file=timeseries_file,
+        timeseries_step_seconds=timeseries_step,
+    )
+
 
 
 # Register trajectory commands

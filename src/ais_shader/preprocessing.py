@@ -656,18 +656,51 @@ def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
         
     try:
         logger.info(f"Reading CSV from {input_file} using Dask DataFrame...")
-        # Note: # Timestamp has a leading hash sign in standard Danish AIS CSV files.
-        # See specification at: http://aisdata.ais.dk/!_README_information_CSV_files.txt
-        needed_src_cols = [
-            '# Timestamp', 'MMSI', 'Latitude', 'Longitude', 'SOG', 'COG', 
-            'Heading', 'Width', 'Length', 'Draught', 'Navigational status', 'Ship type'
-        ]
-        df = dd.read_csv(
-            input_file,
-            compression="zip" if input_file.suffix == ".zip" else None,
-            blocksize=None if input_file.suffix == ".zip" else "64MB",
-            usecols=needed_src_cols,
-            dtype={
+        # Peek at header to auto-detect CSV flavor (Danish vs NOAA / Marine Cadastre)
+        if input_file.suffix == ".zip":
+            with zipfile.ZipFile(input_file, 'r') as z:
+                first_member = z.namelist()[0]
+                with z.open(first_member) as f:
+                    header_line = f.readline().decode('utf-8', errors='ignore')
+        else:
+            with open(input_file, "r", encoding="utf-8", errors="ignore") as f:
+                header_line = f.readline()
+
+        header_lower = header_line.lower()
+        is_noaa = ("base_date_time" in header_lower) or ("vessel_type" in header_lower)
+
+        if is_noaa:
+            needed_src_cols = [
+                'mmsi', 'base_date_time', 'latitude', 'longitude', 'sog', 'cog',
+                'heading', 'width', 'length', 'draft', 'status', 'vessel_type'
+            ]
+            dtype_spec = {
+                'mmsi': 'int64',
+                'base_date_time': 'object',
+                'latitude': 'float64',
+                'longitude': 'float64',
+                'sog': 'float64',
+                'cog': 'float64',
+                'heading': 'float64',
+                'width': 'float64',
+                'length': 'float64',
+                'draft': 'float64',
+                'status': 'object',
+                'vessel_type': 'object',
+            }
+            rename_map = {
+                'width': 'beam',
+                'draft': 'draught',
+                'vessel_type': 'shiptypeAIS',
+            }
+            date_format = None
+        else:
+            # Standard Danish AIS CSV files
+            needed_src_cols = [
+                '# Timestamp', 'MMSI', 'Latitude', 'Longitude', 'SOG', 'COG', 
+                'Heading', 'Width', 'Length', 'Draught', 'Navigational status', 'Ship type'
+            ]
+            dtype_spec = {
                 '# Timestamp': 'object',
                 'MMSI': 'int64',
                 'Latitude': 'float64',
@@ -681,22 +714,31 @@ def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
                 'Navigational status': 'object',
                 'Ship type': 'object'
             }
+            rename_map = {
+                '# Timestamp': 'base_date_time',
+                'MMSI': 'mmsi',
+                'Latitude': 'latitude',
+                'Longitude': 'longitude',
+                'SOG': 'sog',
+                'COG': 'cog',
+                'Heading': 'heading',
+                'Width': 'beam',
+                'Length': 'length',
+                'Draught': 'draught',
+                'Navigational status': 'status',
+                'Ship type': 'shiptypeAIS'
+            }
+            date_format = "%d/%m/%Y %H:%M:%S"
+
+        df = dd.read_csv(
+            input_file,
+            compression="zip" if input_file.suffix == ".zip" else None,
+            blocksize=None if input_file.suffix == ".zip" else "64MB",
+            usecols=needed_src_cols,
+            dtype=dtype_spec,
         )
         
-        df = df.rename(columns={
-            '# Timestamp': 'base_date_time',
-            'MMSI': 'mmsi',
-            'Latitude': 'latitude',
-            'Longitude': 'longitude',
-            'SOG': 'sog',
-            'COG': 'cog',
-            'Heading': 'heading',
-            'Width': 'beam',
-            'Length': 'length',
-            'Draught': 'draught',
-            'Navigational status': 'status',
-            'Ship type': 'shiptypeAIS'
-        })
+        df = df.rename(columns=rename_map)
         
         needed_cols = [
             'mmsi', 'base_date_time', 'longitude', 'latitude', 'cog', 'sog', 
@@ -706,7 +748,10 @@ def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
         
         logger.info("Converting DataFrame to GeoDataFrame with Point geometry...")
         def make_points(df):
-            df['base_date_time'] = pd.to_datetime(df['base_date_time'], format="%d/%m/%Y %H:%M:%S", errors='coerce')
+            if date_format:
+                df['base_date_time'] = pd.to_datetime(df['base_date_time'], format=date_format, errors='coerce')
+            else:
+                df['base_date_time'] = pd.to_datetime(df['base_date_time'], errors='coerce')
             
             # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
             # This generates POINT EMPTY geometries without discarding any raw rows

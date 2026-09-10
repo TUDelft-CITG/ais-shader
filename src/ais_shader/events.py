@@ -1,11 +1,14 @@
 import logging
 from pathlib import Path
+from typing import Optional, Union
 
 import geopandas as gpd
 import pandas as pd
 import shapely
 from shapely.geometry import Point, MultiPoint
 import numpy as np
+
+from ais_shader.fairway import FairwayAxis
 
 logger = logging.getLogger(__name__)
 
@@ -414,5 +417,715 @@ def run_polygon_entry_exit_detection(
     output_file.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Saving events to {output_file}...")
     events_gdf.to_parquet(output_file)
+
+
+# --- Encounter detection: crossings, overtakings, head-on meetings ---
+
+ENCOUNTER_COLS = [
+    'encounter_id',
+    'mmsi_1', 'mmsi_2', 'trip_id_1', 'trip_id_2',
+    'vessel_type_1', 'vessel_type_2', 'vessel_group_1', 'vessel_group_2',
+    'length_1', 'length_2', 'width_1', 'width_2',
+    'sog_1', 'sog_2', 'speed_mps_1', 'speed_mps_2',
+    'heading_1', 'heading_2',
+    'start_time', 'end_time', 'cpa_time', 'min_distance_m',
+    'encounter_type',
+    'overtaking_mmsi', 'overtaken_mmsi',
+]
+
+
+def classify_encounter(
+    heading1: float,
+    heading2: float,
+    speed1: float = None,
+    speed2: float = None,
+    ds_start: float = None,
+    ds_end: float = None,
+    dv_along: float = None,
+    min_moving_speed: float = 0.5,
+    min_overtaking_speed_diff: float = 0.5,
+) -> str:
+    """
+    Classify encounter between two vessels based on relative course and along-track passing.
+
+    Returns:
+      'head-on'          : opposite courses (135 <= rel_angle <= 225)
+      'overtaking'       : same general direction (rel_angle <= 45) AND along-track passing occurs
+                           (ds_start * ds_end <= 0 or active passing with speed differential)
+      'parallel_sailing' : same general direction (rel_angle <= 45) without passing (co-sailing abreast)
+      'crossing'         : courses intersecting at an angle (45 < rel_angle < 135 or 225 < rel_angle < 315)
+      'stationary'       : both vessels are stationary/moored (< min_moving_speed m/s)
+    """
+    if speed1 is not None and speed2 is not None:
+        if speed1 < min_moving_speed and speed2 < min_moving_speed:
+            return "stationary"
+
+    diff = (heading1 - heading2) % 360.0
+    rel_angle = min(diff, 360.0 - diff)
+
+    if rel_angle <= 45.0:
+        if ds_start is not None and ds_end is not None:
+            order_flipped = (ds_start * ds_end < -1.0)
+            has_speed_diff = (dv_along is not None and abs(dv_along) >= min_overtaking_speed_diff)
+            if order_flipped or (has_speed_diff and (ds_start * ds_end <= 0.0 and abs(ds_start - ds_end) > 1.0)):
+                return "overtaking"
+            else:
+                return "parallel_sailing"
+        return "overtaking"
+    elif rel_angle >= 135.0:
+        return "head-on"
+    else:
+        return "crossing"
+
+
+def compute_segment_cpa(
+    p1_start: np.ndarray,
+    p1_end: np.ndarray,
+    t1_start: pd.Timestamp,
+    t1_end: pd.Timestamp,
+    p2_start: np.ndarray,
+    p2_end: np.ndarray,
+    t2_start: pd.Timestamp,
+    t2_end: pd.Timestamp,
+) -> tuple:
+    """
+    Analytically compute Closest Point of Approach (CPA) between two time-overlapping moving segments.
+
+    Coordinates must be in a projected planar CRS (e.g. EPSG:3857, in meters).
+
+    Returns:
+        (cpa_dist_m, cpa_time, p1_cpa, p2_cpa, mid_cpa, heading1, heading2, speed1, speed2,
+         encounter_type, ds_start, ds_end, dv_along)
+        or None if there is no temporal overlap.
+    """
+    t_start = max(t1_start, t2_start)
+    t_end = min(t1_end, t2_end)
+    if t_start >= t_end:
+        return None
+
+    dt_total = (t_end - t_start).total_seconds()
+
+    dur1 = (t1_end - t1_start).total_seconds()
+    dur2 = (t2_end - t2_start).total_seconds()
+
+    v1 = (p1_end - p1_start) / dur1 if dur1 > 1e-6 else np.zeros(2)
+    v2 = (p2_end - p2_start) / dur2 if dur2 > 1e-6 else np.zeros(2)
+
+    speed1 = float(np.hypot(v1[0], v1[1]))
+    speed2 = float(np.hypot(v2[0], v2[1]))
+
+    heading1 = float((np.degrees(np.arctan2(v1[0], v1[1])) + 360.0) % 360.0)
+    heading2 = float((np.degrees(np.arctan2(v2[0], v2[1])) + 360.0) % 360.0)
+
+    offset1 = (t_start - t1_start).total_seconds()
+    offset2 = (t_start - t2_start).total_seconds()
+
+    r1_0 = p1_start + v1 * offset1
+    r2_0 = p2_start + v2 * offset2
+
+    R0 = r1_0 - r2_0
+    delta_v = v1 - v2
+
+    a = float(np.dot(delta_v, delta_v))
+    b = float(2.0 * np.dot(R0, delta_v))
+    c = float(np.dot(R0, R0))
+
+    if a > 1e-12:
+        tau_star = -b / (2.0 * a)
+        tau_cpa = max(0.0, min(dt_total, tau_star))
+    else:
+        tau_cpa = 0.0 if (c <= c + b * dt_total) else dt_total
+
+    cpa_time = t_start + pd.to_timedelta(tau_cpa, unit='s')
+    p1_cpa = r1_0 + v1 * tau_cpa
+    p2_cpa = r2_0 + v2 * tau_cpa
+    mid_cpa = (p1_cpa + p2_cpa) / 2.0
+    diff_cpa = p1_cpa - p2_cpa
+    cpa_dist_m = float(np.hypot(diff_cpa[0], diff_cpa[1]))
+
+    # Along-track projection: along shared average heading
+    v_mean = v1 + v2
+    v_mean_norm = float(np.hypot(v_mean[0], v_mean[1]))
+    if v_mean_norm > 1e-3:
+        u_track = v_mean / v_mean_norm
+        ds_start = float(np.dot(R0, u_track))
+        r_end = (r1_0 + v1 * dt_total) - (r2_0 + v2 * dt_total)
+        ds_end = float(np.dot(r_end, u_track))
+        dv_along = float(np.dot(delta_v, u_track))
+    else:
+        ds_start = 0.0
+        ds_end = 0.0
+        dv_along = 0.0
+
+    enc_type = classify_encounter(
+        heading1, heading2, speed1, speed2,
+        ds_start=ds_start, ds_end=ds_end, dv_along=dv_along,
+    )
+
+    return (cpa_dist_m, cpa_time, p1_cpa, p2_cpa, mid_cpa, heading1, heading2, speed1, speed2,
+            enc_type, ds_start, ds_end, dv_along)
+
+
+def detect_encounters(
+    segments_gdf: gpd.GeoDataFrame,
+    max_distance_m: float = 500.0,
+    time_bin_minutes: float = 60.0,
+    merge_gap_minutes: float = 10.0,
+    fairway_axis: Optional[FairwayAxis] = None,
+) -> gpd.GeoDataFrame:
+    """
+    Detect encounters (crossings, overtakings, head-on meetings) between vessels.
+
+    Uses a spatio-temporal index (temporal binning + Shapely STRtree) to efficiently
+    find pairs of vessel segments within max_distance_m and overlapping in time.
+    For each candidate, calculates the exact Closest Point of Approach (CPA) distance
+    and time, classifies the encounter, and optionally merges consecutive proximity
+    records for the same vessel dyad into a single encounter event.
+
+    When fairway_axis is supplied, encounter classification uses the 1D along-fairway
+    progression (eliminating river bend compass heading false-crossings), and outputs
+    are enriched with river_mile and cross_track_m coordinates.
+    """
+    _require_columns(segments_gdf, ['MMSI', 'trip_id', 'segment_start_time'], "segments_gdf")
+
+    if segments_gdf.empty:
+        return gpd.GeoDataFrame({c: [] for c in ENCOUNTER_COLS}, geometry=[], crs="EPSG:4326")
+
+    gdf = segments_gdf.copy()
+    if fairway_axis is not None and 'fairway_direction' not in gdf.columns:
+        logger.info("Annotating segments with fairway axis kinematics...")
+        gdf = fairway_axis.annotate_segments(gdf)
+    if 'segment_end_time' not in gdf.columns:
+        if 'segment_duration_s' in gdf.columns:
+            gdf['segment_end_time'] = gdf['segment_start_time'] + pd.to_timedelta(gdf['segment_duration_s'], unit='s')
+        else:
+            raise KeyError("segments_gdf must have 'segment_end_time' or 'segment_duration_s'.")
+
+    gdf['segment_start_time'] = pd.to_datetime(gdf['segment_start_time'])
+    gdf['segment_end_time'] = pd.to_datetime(gdf['segment_end_time'])
+
+    t_min = gdf['segment_start_time'].min()
+    t_max = gdf['segment_end_time'].max()
+    if pd.isna(t_min) or pd.isna(t_max):
+        return gpd.GeoDataFrame({c: [] for c in ENCOUNTER_COLS}, geometry=[], crs="EPSG:4326")
+
+    segments_3857 = _to_crs_3857(gdf).reset_index(drop=True)
+    geoms_3857 = segments_3857.geometry.values
+    starts, ends = _segment_start_end_coords(geoms_3857)
+
+    start_times = gdf['segment_start_time'].values
+    end_times = gdf['segment_end_time'].values
+    mmsi_vals = gdf['MMSI'].astype(str).values
+
+    # Spatio-temporal index: partition time into windows to prune non-coincident pairs,
+    # then query Shapely STRtree within each window for spatial proximity.
+    bin_delta = pd.Timedelta(minutes=time_bin_minutes)
+    n_bins = int(np.ceil((t_max - t_min) / bin_delta)) + 1
+
+    candidate_pairs = set()
+    for bin_idx in range(n_bins):
+        bin_t0 = t_min + bin_idx * bin_delta
+        bin_t1 = bin_t0 + bin_delta
+
+        in_bin = (start_times <= bin_t1.to_datetime64()) & (end_times >= bin_t0.to_datetime64())
+        indices = np.where(in_bin)[0]
+        if len(indices) < 2:
+            continue
+
+        bin_geoms = geoms_3857[indices]
+        tree = shapely.STRtree(bin_geoms)
+        i_sub, j_sub = tree.query(bin_geoms, predicate='dwithin', distance=max_distance_m)
+
+        valid_mask = i_sub < j_sub
+        orig_i = indices[i_sub[valid_mask]]
+        orig_j = indices[j_sub[valid_mask]]
+
+        for idx_a, idx_b in zip(orig_i, orig_j):
+            if mmsi_vals[idx_a] != mmsi_vals[idx_b]:
+                if idx_a < idx_b:
+                    candidate_pairs.add((idx_a, idx_b))
+                else:
+                    candidate_pairs.add((idx_b, idx_a))
+
+    if not candidate_pairs:
+        return gpd.GeoDataFrame({c: [] for c in ENCOUNTER_COLS}, geometry=[], crs="EPSG:4326")
+
+    raw_records = []
+    for idx_a, idx_b in candidate_pairs:
+        # Enforce canonical MMSI ordering: vessel 1 has smaller MMSI
+        if mmsi_vals[idx_a] <= mmsi_vals[idx_b]:
+            idx1, idx2 = idx_a, idx_b
+        else:
+            idx1, idx2 = idx_b, idx_a
+
+        t1_s = pd.Timestamp(start_times[idx1])
+        t1_e = pd.Timestamp(end_times[idx1])
+        t2_s = pd.Timestamp(start_times[idx2])
+        t2_e = pd.Timestamp(end_times[idx2])
+
+        cpa_res = compute_segment_cpa(
+            starts[idx1], ends[idx1], t1_s, t1_e,
+            starts[idx2], ends[idx2], t2_s, t2_e
+        )
+        if cpa_res is None:
+            continue
+
+        cpa_dist_m, cpa_time, p1_cpa, p2_cpa, mid_cpa, heading1, heading2, speed1, speed2, enc_type, ds_start, ds_end, dv_along = cpa_res
+        if cpa_dist_m > max_distance_m:
+            continue
+
+        row1 = gdf.iloc[idx1]
+        row2 = gdf.iloc[idx2]
+
+        if fairway_axis is not None:
+            dir1 = row1.get('fairway_direction')
+            dir2 = row2.get('fairway_direction')
+            if dir1 and dir2:
+                enc_type = fairway_axis.classify_fairway_encounter(
+                    dir1, dir2, speed1, speed2, ds_start, ds_end, dv_along
+                )
+
+        overtaking_mmsi = None
+        overtaken_mmsi = None
+        if enc_type == 'overtaking':
+            if fairway_axis is not None and 'fairway_speed_mps' in row1 and 'fairway_speed_mps' in row2:
+                v_f1 = abs(float(row1.get('fairway_speed_mps', speed1)))
+                v_f2 = abs(float(row2.get('fairway_speed_mps', speed2)))
+                if v_f1 >= v_f2:
+                    overtaking_mmsi = mmsi_vals[idx1]
+                    overtaken_mmsi = mmsi_vals[idx2]
+                else:
+                    overtaking_mmsi = mmsi_vals[idx2]
+                    overtaken_mmsi = mmsi_vals[idx1]
+            elif dv_along > 0:
+                overtaking_mmsi = mmsi_vals[idx1]
+                overtaken_mmsi = mmsi_vals[idx2]
+            else:
+                overtaking_mmsi = mmsi_vals[idx2]
+                overtaken_mmsi = mmsi_vals[idx1]
+
+        rec = {
+            'mmsi_1': mmsi_vals[idx1],
+            'mmsi_2': mmsi_vals[idx2],
+            'trip_id_1': row1.get('trip_id'),
+            'trip_id_2': row2.get('trip_id'),
+            'vessel_type_1': row1.get('VesselType'),
+            'vessel_type_2': row2.get('VesselType'),
+            'vessel_group_1': row1.get('VesselGroup'),
+            'vessel_group_2': row2.get('VesselGroup'),
+            'length_1': row1.get('Length', np.nan),
+            'length_2': row2.get('Length', np.nan),
+            'width_1': row1.get('Width', np.nan),
+            'width_2': row2.get('Width', np.nan),
+            'sog_1': row1.get('sog', np.nan),
+            'sog_2': row2.get('sog', np.nan),
+            'speed_mps_1': speed1,
+            'speed_mps_2': speed2,
+            'heading_1': heading1,
+            'heading_2': heading2,
+            'start_time': max(t1_s, t2_s),
+            'end_time': min(t1_e, t2_e),
+            'cpa_time': cpa_time,
+            'min_distance_m': cpa_dist_m,
+            'encounter_type': enc_type,
+            'overtaking_mmsi': overtaking_mmsi,
+            'overtaken_mmsi': overtaken_mmsi,
+            '_mid_x': float(mid_cpa[0]),
+            '_mid_y': float(mid_cpa[1]),
+            '_ds_start': ds_start,
+            '_ds_end': ds_end,
+            '_dv_along': dv_along,
+        }
+        raw_records.append(rec)
+
+    if not raw_records:
+        return gpd.GeoDataFrame({c: [] for c in ENCOUNTER_COLS}, geometry=[], crs="EPSG:4326")
+
+    raw_df = pd.DataFrame(raw_records)
+
+    # Merge consecutive proximity alerts for the same vessel dyad
+    if merge_gap_minutes is not None:
+        merged_records = _merge_encounters(raw_df, merge_gap_minutes)
+    else:
+        merged_records = raw_df.to_dict('records')
+
+    for i, r in enumerate(merged_records):
+        r['encounter_id'] = i
+
+    mid_points_4326 = gpd.GeoSeries(
+        gpd.points_from_xy(
+            [r['_mid_x'] for r in merged_records],
+            [r['_mid_y'] for r in merged_records],
+            crs="EPSG:3857"
+        ),
+        crs="EPSG:3857"
+    ).to_crs("EPSG:4326")
+
+    if fairway_axis is not None and merged_records:
+        pts_metric = mid_points_4326.to_crs(fairway_axis.metric_crs).values
+        _, r_miles, c_tracks = fairway_axis.project_geometries(pts_metric)
+        river_miles = np.round(r_miles, 2).tolist()
+        cross_tracks = np.round(c_tracks, 1).tolist()
+        result_data = {c: [r[c] for r in merged_records] for c in ENCOUNTER_COLS}
+        result_data['river_mile'] = river_miles
+        result_data['cross_track_m'] = cross_tracks
+    else:
+        result_data = {c: [r[c] for r in merged_records] for c in ENCOUNTER_COLS}
+
+    events_gdf = gpd.GeoDataFrame(result_data, geometry=mid_points_4326, crs="EPSG:4326")
+    return events_gdf.reset_index(drop=True)
+
+
+def _merge_encounters(raw_df: pd.DataFrame, merge_gap_minutes: float) -> list:
+    """Group consecutive encounter records between the same two vessels within merge_gap_minutes."""
+    gap = pd.Timedelta(minutes=merge_gap_minutes)
+    sortable = raw_df.sort_values(['mmsi_1', 'mmsi_2', 'start_time'])
+
+    merged = []
+    current_group = []
+
+    def _flush_group(group: list) -> dict:
+        # Pick the record that achieved the absolute minimum CPA distance
+        best_rec = min(group, key=lambda r: r['min_distance_m'])
+        res = dict(best_rec)
+        res['start_time'] = min(r['start_time'] for r in group)
+        res['end_time'] = max(r['end_time'] for r in group)
+
+        # Refine encounter classification across the entire group span
+        initial_ds = group[0]['_ds_start']
+        final_ds = group[-1]['_ds_end']
+        overall_order_flipped = (initial_ds * final_ds < -1.0) or any(r['_ds_start'] * r['_ds_end'] < -1.0 for r in group)
+        overall_dv_along = best_rec.get('_dv_along', 0.0)
+
+        enc_type = best_rec['encounter_type']
+        overtaking_mmsi = None
+        overtaken_mmsi = None
+
+        if enc_type in {'overtaking', 'parallel_sailing'}:
+            has_speed_diff = abs(overall_dv_along) >= 0.5
+            if overall_order_flipped or (has_speed_diff and (initial_ds * final_ds <= 0.0 and abs(initial_ds - final_ds) > 1.0)):
+                enc_type = 'overtaking'
+                if overall_dv_along > 0:
+                    overtaking_mmsi = best_rec['mmsi_1']
+                    overtaken_mmsi = best_rec['mmsi_2']
+                else:
+                    overtaking_mmsi = best_rec['mmsi_2']
+                    overtaken_mmsi = best_rec['mmsi_1']
+            else:
+                enc_type = 'parallel_sailing'
+
+        res['encounter_type'] = enc_type
+        res['overtaking_mmsi'] = overtaking_mmsi
+        res['overtaken_mmsi'] = overtaken_mmsi
+        return res
+
+    for _, row in sortable.iterrows():
+        rec = row.to_dict()
+        if not current_group:
+            current_group.append(rec)
+            continue
+
+        prev = current_group[-1]
+        same_pair = (rec['mmsi_1'] == prev['mmsi_1']) and (rec['mmsi_2'] == prev['mmsi_2'])
+        time_close = (rec['start_time'] - prev['end_time']) <= gap
+
+        if same_pair and time_close:
+            current_group.append(rec)
+        else:
+            merged.append(_flush_group(current_group))
+            current_group = [rec]
+
+    if current_group:
+        merged.append(_flush_group(current_group))
+
+    return merged
+
+
+
+TIMESERIES_COLS = [
+    'encounter_id',
+    'encounter_type',
+    'mmsi_1',
+    'mmsi_2',
+    'timestamp',
+    'distance_m',
+    'is_cpa',
+]
+
+
+def _build_trajectory_lookup(segments_gdf: gpd.GeoDataFrame, max_gap_seconds: float = 600.0) -> dict:
+    """
+    Build piecewise-linear trajectory lookup tables for all vessels in segments_gdf.
+
+    Returns a dict mapping MMSI string to a tuple:
+        (t_starts_ns, t_ends_ns, p_starts, p_ends)
+    where p_starts and p_ends are Nx2 arrays of coordinates in EPSG:4326.
+    """
+    _require_columns(segments_gdf, ['MMSI', 'segment_start_time', 'segment_end_time'], "segments_gdf")
+    lookup = {}
+    grouped = segments_gdf.groupby('MMSI')
+
+    for mmsi, group in grouped:
+        sorted_group = group.sort_values('segment_start_time')
+        coords = shapely.get_coordinates(sorted_group.geometry.values)
+        if len(coords) < 2:
+            continue
+        c_start = coords[0::2]
+        c_end = coords[1::2]
+
+        t_starts = pd.to_datetime(sorted_group['segment_start_time']).values.astype('datetime64[ns]').astype(np.int64)
+        t_ends = pd.to_datetime(sorted_group['segment_end_time']).values.astype('datetime64[ns]').astype(np.int64)
+
+        all_starts = []
+        all_ends = []
+        all_p_start = []
+        all_p_end = []
+
+        n = len(sorted_group)
+        for i in range(n):
+            all_starts.append(t_starts[i])
+            all_ends.append(t_ends[i])
+            all_p_start.append(c_start[i])
+            all_p_end.append(c_end[i])
+
+            if i < n - 1:
+                gap_s = (t_starts[i + 1] - t_ends[i]) / 1e9
+                if 0 < gap_s <= max_gap_seconds:
+                    all_starts.append(t_ends[i])
+                    all_ends.append(t_starts[i + 1])
+                    all_p_start.append(c_end[i])
+                    all_p_end.append(c_start[i + 1])
+
+        lookup[str(mmsi)] = (
+            np.array(all_starts, dtype=np.int64),
+            np.array(all_ends, dtype=np.int64),
+            np.array(all_p_start, dtype=float),
+            np.array(all_p_end, dtype=float),
+        )
+
+    return lookup
+
+
+def _query_vessel_positions(lookup_entry, ts_arr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Query vessel positions at target timestamps (int64 ns). Returns (pts_lonlat, valid_mask)."""
+    t_starts, t_ends, p_starts, p_ends = lookup_entry
+    if len(t_starts) == 0:
+        return np.full((len(ts_arr), 2), np.nan), np.zeros(len(ts_arr), dtype=bool)
+
+    idx = np.searchsorted(t_starts, ts_arr, side='right') - 1
+    valid = (idx >= 0) & (idx < len(t_starts)) & (ts_arr <= t_ends[np.clip(idx, 0, len(t_starts) - 1)])
+
+    pts = np.full((len(ts_arr), 2), np.nan)
+    if not np.any(valid):
+        return pts, valid
+
+    valid_idx = idx[valid]
+    dt = (t_ends[valid_idx] - t_starts[valid_idx]).astype(float)
+    f = np.where(dt > 0, (ts_arr[valid] - t_starts[valid_idx]) / dt, 0.0)
+    pts[valid] = p_starts[valid_idx] + f[:, None] * (p_ends[valid_idx] - p_starts[valid_idx])
+    return pts, valid
+
+
+def generate_encounter_timeseries(
+    segments_gdf: gpd.GeoDataFrame,
+    encounters_gdf: gpd.GeoDataFrame,
+    step_seconds: float = 30.0,
+    fairway_axis: Optional[FairwayAxis] = None,
+    max_gap_seconds: float = 600.0,
+) -> gpd.GeoDataFrame:
+    """
+    Generate dynamic time series of connecting lines between encountering vessels.
+
+    For each encounter event, evaluates the instantaneous position of both vessels
+    at regular time intervals (and at exact CPA time) throughout the encounter duration.
+    Produces a GeoDataFrame of 2-point LineString geometries connecting vessel 1 to vessel 2
+    at each timestamp, enabling seamless temporal playback in GIS (QGIS Temporal Controller,
+    Kepler.gl, ArcGIS).
+
+    Parameters
+    ----------
+    segments_gdf : gpd.GeoDataFrame
+        Trajectory segments with MMSI, segment_start_time, segment_end_time, geometry.
+    encounters_gdf : gpd.GeoDataFrame
+        Detected encounters with mmsi_1, mmsi_2, start_time, end_time, cpa_time, encounter_type.
+    step_seconds : float, default 30.0
+        Temporal sampling interval in seconds.
+    fairway_axis : Optional[FairwayAxis], default None
+        If provided, computes instantaneous river mile and cross-track offset for each vessel.
+    max_gap_seconds : float, default 600.0
+        Maximum time gap across which to interpolate vessel position.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Table with columns:
+        - encounter_id: ID of the corresponding encounter
+        - encounter_type: classification (overtaking, head-on, crossing, etc.)
+        - mmsi_1: MMSI of vessel 1
+        - mmsi_2: MMSI of vessel 2
+        - timestamp: UTC timestamp of the observation
+        - distance_m: instantaneous distance between vessels in meters
+        - is_cpa: boolean indicating if this time step represents closest point of approach
+        - geometry: 2-point LineString connecting P1(t) to P2(t) in EPSG:4326
+        - (Optional if fairway_axis): river_mile_1, river_mile_2, cross_track_m_1, cross_track_m_2, along_channel_gap_m
+    """
+    empty_cols = TIMESERIES_COLS.copy()
+    if fairway_axis is not None:
+        empty_cols += ['river_mile_1', 'river_mile_2', 'cross_track_m_1', 'cross_track_m_2', 'along_channel_gap_m']
+
+    if encounters_gdf.empty or segments_gdf.empty:
+        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+
+    lookup = _build_trajectory_lookup(segments_gdf, max_gap_seconds=max_gap_seconds)
+
+    records = []
+    line_geoms = []
+
+    for idx, enc_row in encounters_gdf.iterrows():
+        enc_id = enc_row.get('encounter_id', idx)
+        mmsi_1 = str(enc_row['mmsi_1'])
+        mmsi_2 = str(enc_row['mmsi_2'])
+        enc_type = enc_row.get('encounter_type')
+
+        if mmsi_1 not in lookup or mmsi_2 not in lookup:
+            continue
+
+        t_start = pd.Timestamp(enc_row['start_time'])
+        t_end = pd.Timestamp(enc_row['end_time'])
+        t_cpa = pd.Timestamp(enc_row['cpa_time'])
+
+        if step_seconds > 0 and t_end > t_start:
+            grid = pd.date_range(t_start, t_end, freq=f"{float(step_seconds)}s").tolist()
+        else:
+            grid = [t_start]
+
+        if not any(abs((t - t_cpa).total_seconds()) < 0.5 for t in grid):
+            if t_start <= t_cpa <= t_end:
+                grid.append(t_cpa)
+        grid = sorted(grid)
+
+        ts_eval = np.array([t.to_datetime64().astype(np.int64) for t in grid])
+        pts1, valid1 = _query_vessel_positions(lookup[mmsi_1], ts_eval)
+        pts2, valid2 = _query_vessel_positions(lookup[mmsi_2], ts_eval)
+
+        valid = valid1 & valid2
+        if not np.any(valid):
+            continue
+
+        sub_grid = [grid[i] for i in range(len(grid)) if valid[i]]
+        sub_ts = ts_eval[valid]
+        sub_p1 = pts1[valid]
+        sub_p2 = pts2[valid]
+
+        coords = np.column_stack([sub_p1, sub_p2]).reshape(-1, 2, 2)
+        lines = shapely.linestrings(coords)
+
+        cpa_val = t_cpa.to_datetime64().astype(np.int64)
+        cpa_diffs = np.abs(sub_ts - cpa_val)
+        min_idx = int(np.argmin(cpa_diffs))
+        is_cpa_arr = np.zeros(len(sub_grid), dtype=bool)
+        if cpa_diffs[min_idx] <= max(step_seconds, 2.0) * 1e9:
+            is_cpa_arr[min_idx] = True
+
+        if fairway_axis is not None:
+            p1_m = gpd.GeoSeries(shapely.points(sub_p1), crs="EPSG:4326").to_crs(fairway_axis.metric_crs).values
+            p2_m = gpd.GeoSeries(shapely.points(sub_p2), crs="EPSG:4326").to_crs(fairway_axis.metric_crs).values
+            p1_coords = shapely.get_coordinates(p1_m)
+            p2_coords = shapely.get_coordinates(p2_m)
+            dist_m = np.hypot(p1_coords[:, 0] - p2_coords[:, 0], p1_coords[:, 1] - p2_coords[:, 1])
+
+            s1, rm1, ct1 = fairway_axis.project_geometries(p1_m)
+            s2, rm2, ct2 = fairway_axis.project_geometries(p2_m)
+            along_gap = np.abs(s1 - s2)
+        else:
+            p1_m = gpd.GeoSeries(shapely.points(sub_p1), crs="EPSG:4326").to_crs("EPSG:3857").values
+            p2_m = gpd.GeoSeries(shapely.points(sub_p2), crs="EPSG:4326").to_crs("EPSG:3857").values
+            p1_coords = shapely.get_coordinates(p1_m)
+            p2_coords = shapely.get_coordinates(p2_m)
+            mean_lat_rad = np.radians((sub_p1[:, 1] + sub_p2[:, 1]) / 2.0)
+            scale = np.cos(mean_lat_rad)
+            dist_m = np.hypot((p1_coords[:, 0] - p2_coords[:, 0]) * scale, (p1_coords[:, 1] - p2_coords[:, 1]) * scale)
+            rm1, rm2, ct1, ct2, along_gap = None, None, None, None, None
+
+        for k in range(len(sub_grid)):
+            rec = {
+                'encounter_id': enc_id,
+                'encounter_type': enc_type,
+                'mmsi_1': mmsi_1,
+                'mmsi_2': mmsi_2,
+                'timestamp': sub_grid[k],
+                'distance_m': round(float(dist_m[k]), 2),
+                'is_cpa': bool(is_cpa_arr[k]),
+            }
+            if fairway_axis is not None:
+                rec['river_mile_1'] = round(float(rm1[k]), 2)
+                rec['river_mile_2'] = round(float(rm2[k]), 2)
+                rec['cross_track_m_1'] = round(float(ct1[k]), 1)
+                rec['cross_track_m_2'] = round(float(ct2[k]), 1)
+                rec['along_channel_gap_m'] = round(float(along_gap[k]), 1)
+            records.append(rec)
+            line_geoms.append(lines[k])
+
+    if not records:
+        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+
+    df_ts = pd.DataFrame(records)
+    return gpd.GeoDataFrame(df_ts, geometry=line_geoms, crs="EPSG:4326").reset_index(drop=True)
+
+
+def run_encounter_detection(
+    segments_file: Path,
+    output_file: Path,
+    max_distance_m: float = 500.0,
+    time_bin_minutes: float = 60.0,
+    merge_gap_minutes: float = 10.0,
+    fairway_axis: Optional[Union[FairwayAxis, str, Path]] = None,
+    river_name: str = "MISSISSIPPI-LO",
+    timeseries_file: Optional[Path] = None,
+    timeseries_step_seconds: float = 30.0,
+) -> None:
+    """CLI/script entry point: detect_encounters, reading and writing GeoParquet files."""
+    logger.info(f"Loading segments from {segments_file}...")
+    segments_gdf = gpd.read_parquet(segments_file)
+
+    axis_obj = None
+    if fairway_axis is not None:
+        if isinstance(fairway_axis, FairwayAxis):
+            axis_obj = fairway_axis
+        else:
+            logger.info(f"Loading fairway axis from {fairway_axis} (river={river_name})...")
+            axis_obj = FairwayAxis.from_mile_markers(fairway_axis, river_name=river_name)
+
+    logger.info(f"Detecting encounters (max_distance={max_distance_m}m)...")
+    events_gdf = detect_encounters(
+        segments_gdf,
+        max_distance_m=max_distance_m,
+        time_bin_minutes=time_bin_minutes,
+        merge_gap_minutes=merge_gap_minutes,
+        fairway_axis=axis_obj,
+    )
+    logger.info(f"Found {len(events_gdf):,} encounter events.")
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Saving encounters to {output_file}...")
+    events_gdf.to_parquet(output_file)
+
+    if timeseries_file is not None and not events_gdf.empty:
+        logger.info(f"Generating encounter time series (step={timeseries_step_seconds}s)...")
+        ts_gdf = generate_encounter_timeseries(
+            segments_gdf,
+            events_gdf,
+            step_seconds=timeseries_step_seconds,
+            fairway_axis=axis_obj,
+        )
+        logger.info(f"Generated {len(ts_gdf):,} time series connecting lines.")
+        timeseries_file.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Saving encounter time series to {timeseries_file}...")
+        if timeseries_file.suffix in {".parquet", ".geoparquet"}:
+            ts_gdf.to_parquet(timeseries_file)
+        else:
+            ts_gdf.to_file(timeseries_file, driver="GeoJSON")
+
+
 
 

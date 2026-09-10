@@ -1,5 +1,6 @@
 rendered/
 rendered_debug/
+output_encounters/
 
 .venv/
 __pycache__/
