@@ -65,30 +65,42 @@ sleep 10
 
 # 3. Step 1: Convert raw CSV to standard flat GeoParquet with Mississippi BBOX filter
 FLAT_PARQUET="$DATA_DIR/mississippi_flat.geoparquet"
-echo "==> [1/4] Converting CSV to flat GeoParquet with Mississippi corridor bounding box..."
-uv run ais-shader convert csv "$RAW_CSV" \
-    -o "$FLAT_PARQUET" \
-    --bbox "-91.5,29.0,-89.0,31.0" \
-    --scheduler "${SCHEDULER_URL}"
+if [ ! -e "$FLAT_PARQUET" ]; then
+    echo "==> [1/4] Converting CSV to flat GeoParquet with Mississippi corridor bounding box..."
+    uv run ais-shader convert csv "$RAW_CSV" \
+        -o "$FLAT_PARQUET" \
+        --bbox "-91.5,29.0,-89.0,31.0" \
+        --scheduler "${SCHEDULER_URL}"
+else
+    echo "==> [1/4] Flat GeoParquet already exists: $FLAT_PARQUET"
+fi
 
 # 4. Step 2: Trajectorize using Dask compute
 TRAJ_PARQUET="$DATA_DIR/mississippi_trajectories.parquet"
-echo "==> [2/4] Trajectorizing fixes into voyages using Dask..."
-uv run ais-shader trajectory compute "$FLAT_PARQUET" \
-    -o "$TRAJ_PARQUET" \
-    --scheduler "${SCHEDULER_URL}" \
-    --vessel-id-col mmsi \
-    --time-col base_date_time \
-    --gap-threshold-hours 0.5 \
-    --shuffle-backend disk \
-    --n-partitions 64 \
-    --partition-method spatiotemporal
+if [ ! -e "$TRAJ_PARQUET" ]; then
+    echo "==> [2/4] Trajectorizing fixes into voyages using Dask..."
+    uv run ais-shader trajectory compute "$FLAT_PARQUET" \
+        -o "$TRAJ_PARQUET" \
+        --scheduler "${SCHEDULER_URL}" \
+        --vessel-id-col mmsi \
+        --time-col base_date_time \
+        --gap-threshold-hours 0.5 \
+        --shuffle-backend disk \
+        --n-partitions 64 \
+        --partition-method spatiotemporal
+else
+    echo "==> [2/4] Trajectorized dataset already exists: $TRAJ_PARQUET"
+fi
 
 # 5. Step 3: Convert trajectories into point-pair segments
 SEGS_PARQUET="$DATA_DIR/mississippi_segments.geoparquet"
-echo "==> [3/4] Generating point-pair trajectory segments..."
-uv run ais-shader trajectory to-segment "$TRAJ_PARQUET" \
-    -o "$SEGS_PARQUET"
+if [ ! -e "$SEGS_PARQUET" ]; then
+    echo "==> [3/4] Generating point-pair trajectory segments..."
+    uv run ais-shader trajectory to-segment "$TRAJ_PARQUET" \
+        -o "$SEGS_PARQUET"
+else
+    echo "==> [3/4] Segments already exist: $SEGS_PARQUET"
+fi
 
 # 6. Step 4: Detect encounters and generate dynamic time series connecting lines
 ENCOUNTERS_PARQUET="$DATA_DIR/mississippi_encounters.geoparquet"
