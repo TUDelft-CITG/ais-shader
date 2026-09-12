@@ -65,4 +65,5 @@ def test_events_encounters_help():
     assert "--max-distance" in result.output
     assert "--time-bin-minutes" in result.output
     assert "--merge-gap-minutes" in result.output
+    assert "--metric-crs" in result.output
 

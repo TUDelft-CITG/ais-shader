@@ -78,3 +78,29 @@ def test_fairway_encounter_classification_in_bend():
         ds_start=50.0, ds_end=50.0, dv_along=0.0
     )
     assert enc_parallel == "parallel_sailing"
+
+
+def test_get_utm_crs_for_lon_lat():
+    from ais_shader.fairway import get_utm_crs_for_lon_lat
+
+    # Normal locations
+    assert get_utm_crs_for_lon_lat(-90.0, 30.0) == "EPSG:32616"  # Mississippi, Northern hemisphere
+    assert get_utm_crs_for_lon_lat(0.0, 51.0) == "EPSG:32631"    # Greenwich, Northern hemisphere
+    assert get_utm_crs_for_lon_lat(0.0, -20.0) == "EPSG:32731"   # Southern hemisphere
+
+    # Extreme / boundary longitudes
+    assert get_utm_crs_for_lon_lat(180.0, 10.0) == "EPSG:32660"  # Valid zone 60 at +180 boundary
+    assert get_utm_crs_for_lon_lat(-180.0, 10.0) == "EPSG:32601" # Zone 1 at -180 boundary
+    assert get_utm_crs_for_lon_lat(179.9, -10.0) == "EPSG:32760"
+    assert get_utm_crs_for_lon_lat(-179.9, -10.0) == "EPSG:32701"
+
+    # Out of range coordinates must fail fast and early
+    with pytest.raises(ValueError, match="Longitude.*out of valid range"):
+        get_utm_crs_for_lon_lat(181.0, 0.0)
+    with pytest.raises(ValueError, match="Longitude.*out of valid range"):
+        get_utm_crs_for_lon_lat(-181.0, 0.0)
+    with pytest.raises(ValueError, match="Latitude.*out of valid range"):
+        get_utm_crs_for_lon_lat(0.0, 95.0)
+    with pytest.raises(ValueError, match="Latitude.*out of valid range"):
+        get_utm_crs_for_lon_lat(0.0, -95.0)
+

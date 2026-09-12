@@ -316,5 +316,28 @@ def test_generate_encounter_timeseries():
     cpa_row = ts_gdf[ts_gdf['is_cpa']].iloc[0]
     assert cpa_row['distance_m'] <= ts_gdf['distance_m'].min() + 0.1
 
+    # Verify float step_seconds works without frequency string errors
+    ts_float_gdf = generate_encounter_timeseries(segments_gdf, encounters, step_seconds=15.5)
+    assert not ts_float_gdf.empty
+    assert len(ts_float_gdf) > len(ts_gdf)
+
+
+def test_detect_encounters_custom_metric_crs():
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            _make_segment('111', 'ship1', (0.0, 50.0), (0.0, 50.01), '2026-06-14 12:00:00', 600, sog=10.0),
+            _make_segment('222', 'ship2', (0.001, 50.01), (0.001, 50.0), '2026-06-14 12:00:00', 600, sog=10.0),
+        ],
+        crs="EPSG:4326"
+    )
+
+    encounters = detect_encounters(segments_gdf, max_distance_m=500.0, metric_crs="EPSG:32631")
+    assert len(encounters) == 1
+    assert encounters.iloc[0]['encounter_type'] == 'head-on'
+    assert encounters.iloc[0]['min_distance_m'] < 200.0
+
+    ts = generate_encounter_timeseries(segments_gdf, encounters, step_seconds=30.0, metric_crs="EPSG:32631")
+    assert not ts.empty
+
 
 

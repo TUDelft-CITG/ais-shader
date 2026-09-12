@@ -8,7 +8,7 @@ import shapely
 from shapely.geometry import Point, MultiPoint
 import numpy as np
 
-from ais_shader.fairway import FairwayAxis
+from ais_shader.fairway import FairwayAxis, get_utm_crs_for_lon_lat
 
 logger = logging.getLogger(__name__)
 
@@ -451,7 +451,8 @@ def classify_encounter(
     Returns:
       'head-on'          : opposite courses (135 <= rel_angle <= 225)
       'overtaking'       : same general direction (rel_angle <= 45) AND along-track passing occurs
-                           (ds_start * ds_end <= 0 or active passing with speed differential)
+                           (ds_start * ds_end <= 0 or active passing with speed differential),
+                           or defaults to 'overtaking' when ds_start/ds_end are not provided
       'parallel_sailing' : same general direction (rel_angle <= 45) without passing (co-sailing abreast)
       'crossing'         : courses intersecting at an angle (45 < rel_angle < 135 or 225 < rel_angle < 315)
       'stationary'       : both vessels are stationary/moored (< min_moving_speed m/s)
@@ -572,6 +573,7 @@ def detect_encounters(
     time_bin_minutes: float = 60.0,
     merge_gap_minutes: float = 10.0,
     fairway_axis: Optional[FairwayAxis] = None,
+    metric_crs: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
     """
     Detect encounters (crossings, overtakings, head-on meetings) between vessels.
@@ -609,9 +611,20 @@ def detect_encounters(
     if pd.isna(t_min) or pd.isna(t_max):
         return gpd.GeoDataFrame({c: [] for c in ENCOUNTER_COLS}, geometry=[], crs="EPSG:4326")
 
-    segments_3857 = _to_crs_3857(gdf).reset_index(drop=True)
-    geoms_3857 = segments_3857.geometry.values
-    starts, ends = _segment_start_end_coords(geoms_3857)
+    if metric_crs is None:
+        if fairway_axis is not None:
+            metric_crs = fairway_axis.metric_crs
+        elif gdf.crs is not None and gdf.crs.is_projected:
+            metric_crs = str(gdf.crs)
+        else:
+            bounds = gdf.total_bounds
+            mean_lon = float((bounds[0] + bounds[2]) / 2.0)
+            mean_lat = float((bounds[1] + bounds[3]) / 2.0)
+            metric_crs = get_utm_crs_for_lon_lat(mean_lon, mean_lat)
+
+    segments_metric = gdf.to_crs(metric_crs).reset_index(drop=True)
+    geoms_metric = segments_metric.geometry.values
+    starts, ends = _segment_start_end_coords(geoms_metric)
 
     start_times = gdf['segment_start_time'].values
     end_times = gdf['segment_end_time'].values
@@ -632,7 +645,7 @@ def detect_encounters(
         if len(indices) < 2:
             continue
 
-        bin_geoms = geoms_3857[indices]
+        bin_geoms = geoms_metric[indices]
         tree = shapely.STRtree(bin_geoms)
         i_sub, j_sub = tree.query(bin_geoms, predicate='dwithin', distance=max_distance_m)
 
@@ -756,9 +769,9 @@ def detect_encounters(
         gpd.points_from_xy(
             [r['_mid_x'] for r in merged_records],
             [r['_mid_y'] for r in merged_records],
-            crs="EPSG:3857"
+            crs=metric_crs
         ),
-        crs="EPSG:3857"
+        crs=metric_crs
     ).to_crs("EPSG:4326")
 
     if fairway_axis is not None and merged_records:
@@ -932,6 +945,7 @@ def generate_encounter_timeseries(
     step_seconds: float = 30.0,
     fairway_axis: Optional[FairwayAxis] = None,
     max_gap_seconds: float = 600.0,
+    metric_crs: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
     """
     Generate dynamic time series of connecting lines between encountering vessels.
@@ -954,6 +968,8 @@ def generate_encounter_timeseries(
         If provided, computes instantaneous river mile and cross-track offset for each vessel.
     max_gap_seconds : float, default 600.0
         Maximum time gap across which to interpolate vessel position.
+    metric_crs : Optional[str], default None
+        Projected metric CRS for distance calculations. Defaults to fairway metric CRS or UTM.
 
     Returns
     -------
@@ -976,6 +992,17 @@ def generate_encounter_timeseries(
     if encounters_gdf.empty or segments_gdf.empty:
         return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
 
+    if metric_crs is None:
+        if fairway_axis is not None:
+            metric_crs = fairway_axis.metric_crs
+        elif segments_gdf.crs is not None and segments_gdf.crs.is_projected:
+            metric_crs = str(segments_gdf.crs)
+        else:
+            bounds = segments_gdf.total_bounds
+            mean_lon = float((bounds[0] + bounds[2]) / 2.0)
+            mean_lat = float((bounds[1] + bounds[3]) / 2.0)
+            metric_crs = get_utm_crs_for_lon_lat(mean_lon, mean_lat)
+
     lookup = _build_trajectory_lookup(segments_gdf, max_gap_seconds=max_gap_seconds)
 
     records = []
@@ -995,7 +1022,7 @@ def generate_encounter_timeseries(
         t_cpa = pd.Timestamp(enc_row['cpa_time'])
 
         if step_seconds > 0 and t_end > t_start:
-            grid = pd.date_range(t_start, t_end, freq=f"{float(step_seconds)}s").tolist()
+            grid = pd.date_range(t_start, t_end, freq=pd.Timedelta(seconds=step_seconds)).tolist()
         else:
             grid = [t_start]
 
@@ -1027,24 +1054,17 @@ def generate_encounter_timeseries(
         if cpa_diffs[min_idx] <= max(step_seconds, 2.0) * 1e9:
             is_cpa_arr[min_idx] = True
 
-        if fairway_axis is not None:
-            p1_m = gpd.GeoSeries(shapely.points(sub_p1), crs="EPSG:4326").to_crs(fairway_axis.metric_crs).values
-            p2_m = gpd.GeoSeries(shapely.points(sub_p2), crs="EPSG:4326").to_crs(fairway_axis.metric_crs).values
-            p1_coords = shapely.get_coordinates(p1_m)
-            p2_coords = shapely.get_coordinates(p2_m)
-            dist_m = np.hypot(p1_coords[:, 0] - p2_coords[:, 0], p1_coords[:, 1] - p2_coords[:, 1])
+        p1_m = gpd.GeoSeries(shapely.points(sub_p1), crs="EPSG:4326").to_crs(metric_crs).values
+        p2_m = gpd.GeoSeries(shapely.points(sub_p2), crs="EPSG:4326").to_crs(metric_crs).values
+        p1_coords = shapely.get_coordinates(p1_m)
+        p2_coords = shapely.get_coordinates(p2_m)
+        dist_m = np.hypot(p1_coords[:, 0] - p2_coords[:, 0], p1_coords[:, 1] - p2_coords[:, 1])
 
+        if fairway_axis is not None:
             s1, rm1, ct1 = fairway_axis.project_geometries(p1_m)
             s2, rm2, ct2 = fairway_axis.project_geometries(p2_m)
             along_gap = np.abs(s1 - s2)
         else:
-            p1_m = gpd.GeoSeries(shapely.points(sub_p1), crs="EPSG:4326").to_crs("EPSG:3857").values
-            p2_m = gpd.GeoSeries(shapely.points(sub_p2), crs="EPSG:4326").to_crs("EPSG:3857").values
-            p1_coords = shapely.get_coordinates(p1_m)
-            p2_coords = shapely.get_coordinates(p2_m)
-            mean_lat_rad = np.radians((sub_p1[:, 1] + sub_p2[:, 1]) / 2.0)
-            scale = np.cos(mean_lat_rad)
-            dist_m = np.hypot((p1_coords[:, 0] - p2_coords[:, 0]) * scale, (p1_coords[:, 1] - p2_coords[:, 1]) * scale)
             rm1, rm2, ct1, ct2, along_gap = None, None, None, None, None
 
         for k in range(len(sub_grid)):
@@ -1083,6 +1103,7 @@ def run_encounter_detection(
     river_name: str = "MISSISSIPPI-LO",
     timeseries_file: Optional[Path] = None,
     timeseries_step_seconds: float = 30.0,
+    metric_crs: Optional[str] = None,
 ) -> None:
     """CLI/script entry point: detect_encounters, reading and writing GeoParquet files."""
     logger.info(f"Loading segments from {segments_file}...")
@@ -1103,6 +1124,7 @@ def run_encounter_detection(
         time_bin_minutes=time_bin_minutes,
         merge_gap_minutes=merge_gap_minutes,
         fairway_axis=axis_obj,
+        metric_crs=metric_crs,
     )
     logger.info(f"Found {len(events_gdf):,} encounter events.")
 
@@ -1117,6 +1139,7 @@ def run_encounter_detection(
             events_gdf,
             step_seconds=timeseries_step_seconds,
             fairway_axis=axis_obj,
+            metric_crs=metric_crs,
         )
         logger.info(f"Generated {len(ts_gdf):,} time series connecting lines.")
         timeseries_file.parent.mkdir(parents=True, exist_ok=True)

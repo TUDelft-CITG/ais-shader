@@ -57,53 +57,74 @@ def stream_noaa_mississippi_slice(
     min_lon, min_lat, max_lon, max_lat = bbox
     logger.info(f"Streaming NOAA AIS slice from {url} (range: 0-{byte_limit} bytes, min_sog={min_sog} kn)...")
 
-    cmd = f"curl -s -r 0-{byte_limit} '{url}' | zstd -dc 2>/dev/null"
-    proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-
-    header = proc.stdout.readline()
-    if not header:
-        raise RuntimeError("Failed to stream data from URL or decompress with zstd.")
-
-    cols = [c.strip() for c in header.split(",")]
-    col_idx = {c: i for i, c in enumerate(cols)}
-
-    needed = ['mmsi', 'base_date_time', 'longitude', 'latitude', 'sog', 'cog', 'heading', 'vessel_type', 'length', 'width']
-    for c in needed:
-        if c not in col_idx:
-            raise KeyError(f"Missing column '{c}' in stream. Found: {cols}")
+    curl_cmd = ["curl", "-s", "-r", f"0-{byte_limit}", url]
+    zstd_cmd = ["zstd", "-dc"]
+    curl_proc = subprocess.Popen(curl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    zstd_proc = subprocess.Popen(
+        zstd_cmd,
+        stdin=curl_proc.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if curl_proc.stdout is not None:
+        curl_proc.stdout.close()
 
     records = []
-    for line in proc.stdout:
-        parts = line.strip().split(",")
-        if len(parts) < len(cols):
-            continue
-        try:
-            lon = float(parts[col_idx['longitude']])
-            lat = float(parts[col_idx['latitude']])
-            sog = float(parts[col_idx['sog']]) if parts[col_idx['sog']] else 0.0
-        except ValueError:
-            continue
+    try:
+        header = zstd_proc.stdout.readline()
+        if not header:
+            raise RuntimeError("Failed to stream data from URL or decompress with zstd.")
 
-        if min_sog is not None and sog < min_sog:
-            continue
+        cols = [c.strip() for c in header.split(",")]
+        col_idx = {c: i for i, c in enumerate(cols)}
 
-        if min_lon <= lon <= max_lon and min_lat <= lat <= max_lat:
-            records.append({
-                'mmsi': int(parts[col_idx['mmsi']]),
-                'base_date_time': parts[col_idx['base_date_time']],
-                'longitude': lon,
-                'latitude': lat,
-                'sog': sog,
-                'cog': float(parts[col_idx['cog']]) if parts[col_idx['cog']] else 0.0,
-                'heading': float(parts[col_idx['heading']]) if parts[col_idx['heading']] else 0.0,
-                'vessel_type': parts[col_idx['vessel_type']],
-                'length': float(parts[col_idx['length']]) if parts[col_idx['length']] else np.nan,
-                'width': float(parts[col_idx['width']]) if parts[col_idx['width']] else np.nan,
-            })
-            if max_records and len(records) >= max_records:
-                break
+        needed = ['mmsi', 'base_date_time', 'longitude', 'latitude', 'sog', 'cog', 'heading', 'vessel_type', 'length', 'width']
+        for c in needed:
+            if c not in col_idx:
+                raise KeyError(f"Missing column '{c}' in stream. Found: {cols}")
 
-    proc.terminate()
+        for line in zstd_proc.stdout:
+            parts = line.strip().split(",")
+            if len(parts) < len(cols):
+                continue
+            try:
+                lon = float(parts[col_idx['longitude']])
+                lat = float(parts[col_idx['latitude']])
+                sog = float(parts[col_idx['sog']]) if parts[col_idx['sog']] else 0.0
+            except ValueError:
+                continue
+
+            if min_sog is not None and sog < min_sog:
+                continue
+
+            if min_lon <= lon <= max_lon and min_lat <= lat <= max_lat:
+                records.append({
+                    'mmsi': int(parts[col_idx['mmsi']]),
+                    'base_date_time': parts[col_idx['base_date_time']],
+                    'longitude': lon,
+                    'latitude': lat,
+                    'sog': sog,
+                    'cog': float(parts[col_idx['cog']]) if parts[col_idx['cog']] else 0.0,
+                    'heading': float(parts[col_idx['heading']]) if parts[col_idx['heading']] else 0.0,
+                    'vessel_type': parts[col_idx['vessel_type']],
+                    'length': float(parts[col_idx['length']]) if parts[col_idx['length']] else np.nan,
+                    'width': float(parts[col_idx['width']]) if parts[col_idx['width']] else np.nan,
+                })
+                if max_records and len(records) >= max_records:
+                    break
+    finally:
+        for proc in (zstd_proc, curl_proc):
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=2)
+                except Exception:
+                    pass
+
     df = pd.DataFrame(records)
     logger.info(f"Streamed and filtered {len(df):,} Mississippi AIS points.")
     return df

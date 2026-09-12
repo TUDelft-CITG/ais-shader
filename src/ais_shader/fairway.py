@@ -30,7 +30,14 @@ logger = logging.getLogger(__name__)
 
 def get_utm_crs_for_lon_lat(lon: float, lat: float) -> str:
     """Determine the appropriate UTM EPSG CRS string for a given longitude and latitude."""
-    zone = int((lon + 180) / 6) + 1
+    if not (-180.0 <= lon <= 180.0):
+        raise ValueError(f"Longitude {lon} is out of valid range [-180, 180].")
+    if not (-90.0 <= lat <= 90.0):
+        raise ValueError(f"Latitude {lat} is out of valid range [-90, 90].")
+    if lon == 180.0:
+        zone = 60
+    else:
+        zone = int((lon + 180) / 6) + 1
     if lat >= 0:
         return f"EPSG:{32600 + zone}"
     else:

@@ -684,13 +684,19 @@ def polygon_entry_exit(input_file, polygons_file, polygon_id_col, merge_gap_minu
     help="Temporal sampling interval in seconds for encounter time series (default: 30s).",
 )
 @click.option(
+    "--metric-crs",
+    type=str,
+    default=None,
+    help="Projected metric coordinate reference system for CPA distance calculations (e.g. 'EPSG:32615'). Defaults to fairway metric CRS or auto-detected UTM zone.",
+)
+@click.option(
     "--output-file",
     "-o",
     type=click.Path(path_type=Path),
     default=None,
     help="Path to output GeoParquet file. Defaults to input file name with -encounters.geoparquet extension.",
 )
-def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fairway_markers, river_name, timeseries_file, timeseries_step, output_file):
+def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fairway_markers, river_name, timeseries_file, timeseries_step, metric_crs, output_file):
     """
     Detect vessel encounters (crossings, overtakings, head-on meetings) from a segment table.
     """
@@ -706,6 +712,7 @@ def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fa
         river_name=river_name,
         timeseries_file=timeseries_file,
         timeseries_step_seconds=timeseries_step,
+        metric_crs=metric_crs,
     )
 
 
