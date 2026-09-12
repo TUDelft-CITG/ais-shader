@@ -107,7 +107,7 @@ def get_vessel_group(shiptype, vessel_mapping: dict) -> str:
     are looked up in vessel_mapping (see build_vessel_mapping), supplied via
     --vessel-codes-json, since there's no universal string vocabulary to bake in.
     """
-    if not shiptype:
+    if pd.isna(shiptype) or not shiptype:
         return "Other"
     try:
         code = int(float(shiptype))
