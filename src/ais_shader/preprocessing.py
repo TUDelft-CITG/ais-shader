@@ -4,6 +4,7 @@ import logging
 import shutil
 import zipfile
 from pathlib import Path
+from typing import Optional
 import dask.bag as db
 import dask.dataframe as dd
 import dask_geopandas
@@ -643,7 +644,7 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
         client.close()
 
 
-def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
+def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str = None, bbox: Optional[str] = None):
     """
     Convert CSV AIS data (standard or zipped) to standard flat GeoParquet.
     """
@@ -745,7 +746,18 @@ def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
             'heading', 'beam', 'length', 'draught', 'status', 'shiptypeAIS'
         ]
         df = df[needed_cols]
-        
+
+        if bbox:
+            parts = [float(x.strip()) for x in bbox.split(",")]
+            if len(parts) != 4:
+                raise ValueError(f"Invalid bbox format '{bbox}'. Expected 4 comma-separated values: min_lon,min_lat,max_lon,max_lat")
+            min_lon, min_lat, max_lon, max_lat = parts
+            logger.info(f"Filtering coordinates within bounding box [{min_lon}, {min_lat}, {max_lon}, {max_lat}]...")
+            df = df[
+                (df['longitude'] >= min_lon) & (df['longitude'] <= max_lon) &
+                (df['latitude'] >= min_lat) & (df['latitude'] <= max_lat)
+            ]
+
         logger.info("Converting DataFrame to GeoDataFrame with Point geometry...")
         def make_points(df):
             if date_format:

@@ -242,12 +242,18 @@ def convert_ndjson(input_file, output_file, scheduler):
     default=None,
     help="Address of the Dask scheduler. If None, starts a local cluster.",
 )
-def convert_csv(input_file, output_file, scheduler):
+@click.option(
+    "--bbox",
+    type=str,
+    default=None,
+    help="Spatial bounding box filter as 'min_lon,min_lat,max_lon,max_lat' (e.g. '-91.5,29.0,-89.0,31.0').",
+)
+def convert_csv(input_file, output_file, scheduler, bbox):
     """
-    Convert a CSV (or zipped CSV) file (e.g. from aisdata.ais.dk) to a standard flat GeoParquet file.
+    Convert a CSV (or zipped CSV) file (e.g. from aisdata.ais.dk or NOAA) to a standard flat GeoParquet file.
     """
     output_file = output_file or _default_output_path(input_file, ".geoparquet")
-    run_csv_conversion(input_file, output_file, scheduler)
+    run_csv_conversion(input_file, output_file, scheduler, bbox=bbox)
 
 
 @cli.command()

@@ -74,3 +74,32 @@ def test_noaa_csv_conversion(tmp_path):
     assert row1["draught"] == 3.3
     assert int(row1["shiptypeAIS"]) == 31
 
+
+def test_noaa_csv_conversion_with_bbox(tmp_path):
+    csv_file = tmp_path / "noaa_bbox.csv"
+    parquet_file = tmp_path / "noaa_bbox.parquet"
+
+    # Row 1 is in Ohio (lon -82.5, lat 38.4)
+    # Row 2 is in Pennsylvania (lon -80.1, lat 40.5)
+    content = (
+        "mmsi,base_date_time,longitude,latitude,sog,cog,heading,vessel_name,imo,call_sign,vessel_type,status,length,width,draft,cargo,transceiver\n"
+        "366996430,2026-03-31 00:00:00,-82.55641,38.40362,0.1,295.2,100,CAPT JEFF IRBY,,WDK7088,31,12,20,8,3.3,,A\n"
+        "368435310,2026-03-31 00:00:00,-80.11748,40.51168,5.0,180.0,180,DANI Z,,WDQ5513,52,0,15,6,,52,A\n"
+    )
+
+    with open(csv_file, "w") as f:
+        f.write(content)
+
+    # Filter with bbox covering only Row 1 (-83 to -81, 38 to 39)
+    run_csv_conversion(csv_file, parquet_file, scheduler=None, bbox="-83.0,38.0,-81.0,39.0")
+
+    assert parquet_file.exists()
+    gdf = gpd.read_parquet(parquet_file)
+    assert len(gdf) == 1
+    assert gdf.iloc[0]["mmsi"] == 366996430
+
+    # Test invalid bbox fails fast
+    with pytest.raises(ValueError, match="Invalid bbox format"):
+        run_csv_conversion(csv_file, tmp_path / "fail.parquet", scheduler=None, bbox="-83.0,38.0")
+
+
