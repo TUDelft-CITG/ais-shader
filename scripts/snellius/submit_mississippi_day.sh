@@ -54,6 +54,13 @@ trap "kill ${SCHEDULER_PID} 2>/dev/null || true" EXIT
 
 sleep 5
 
+echo "=========================================================================="
+echo " DASK DASHBOARD ACTIVE"
+echo " Run from your local terminal to forward (using local port 8788):"
+echo "   ssh -N -L 8788:${SCHEDULER_HOST}:8787 ${USER_NAME}@snellius.surf.nl"
+echo " Then browse: http://localhost:8788/status"
+echo "=========================================================================="
+
 echo "==> Starting Dask Workers (4 workers x 32 threads, 50GB memory each)..."
 srun uv run dask-worker "${SCHEDULER_URL}" \
     --nthreads 32 \
