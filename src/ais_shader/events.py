@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 
 import geopandas as gpd
 import pandas as pd
@@ -573,6 +573,71 @@ def compute_segment_cpa(
             enc_type, ds_start, ds_end, dv_along)
 
 
+def compute_proximity_interval(
+    p1_start: np.ndarray,
+    p1_end: np.ndarray,
+    t1_start: pd.Timestamp,
+    t1_end: pd.Timestamp,
+    p2_start: np.ndarray,
+    p2_end: np.ndarray,
+    t2_start: pd.Timestamp,
+    t2_end: pd.Timestamp,
+    max_distance_m: float,
+) -> Optional[Tuple[pd.Timestamp, pd.Timestamp]]:
+    """
+    Analytically compute the time interval [t_prox_start, t_prox_end] during which
+    the distance between two moving segments is <= max_distance_m.
+
+    Coordinates must be in a projected planar CRS (meters).
+    Returns (t_prox_start, t_prox_end) or None if the vessels never get within max_distance_m.
+    """
+    t_start = max(t1_start, t2_start)
+    t_end = min(t1_end, t2_end)
+    if t_start >= t_end:
+        return None
+
+    dt_total = (t_end - t_start).total_seconds()
+    dur1 = (t1_end - t1_start).total_seconds()
+    dur2 = (t2_end - t2_start).total_seconds()
+
+    v1 = (p1_end - p1_start) / dur1 if dur1 > 1e-6 else np.zeros(2)
+    v2 = (p2_end - p2_start) / dur2 if dur2 > 1e-6 else np.zeros(2)
+
+    offset1 = (t_start - t1_start).total_seconds()
+    offset2 = (t_start - t2_start).total_seconds()
+
+    r1_0 = p1_start + v1 * offset1
+    r2_0 = p2_start + v2 * offset2
+
+    R0 = r1_0 - r2_0
+    delta_v = v1 - v2
+
+    a = float(np.dot(delta_v, delta_v))
+    b = float(2.0 * np.dot(R0, delta_v))
+    c = float(np.dot(R0, R0))
+    d_max_sq = max_distance_m * max_distance_m
+
+    if a > 1e-12:
+        disc = b * b - 4.0 * a * (c - d_max_sq)
+        if disc < 0:
+            return None
+        sqrt_disc = np.sqrt(disc)
+        tau_1 = (-b - sqrt_disc) / (2.0 * a)
+        tau_2 = (-b + sqrt_disc) / (2.0 * a)
+        tau_s = max(0.0, tau_1)
+        tau_e = min(dt_total, tau_2)
+        if tau_s > tau_e:
+            return None
+        return (
+            t_start + pd.to_timedelta(tau_s, unit='s'),
+            t_start + pd.to_timedelta(tau_e, unit='s'),
+        )
+    else:
+        if c <= d_max_sq:
+            return (t_start, t_end)
+        return None
+
+
 def _evaluate_candidates_in_window(
     segments_metric: gpd.GeoDataFrame,
     t_start: pd.Timestamp,
@@ -582,6 +647,7 @@ def _evaluate_candidates_in_window(
     merge_gap_minutes: Optional[float] = None,
     exclude_stationary: str = 'both',
     min_moving_speed: float = 0.5,
+    max_segment_duration_s: float = 1800.0,
 ) -> list:
     """Evaluate pairwise encounters within a spatio-temporal window."""
     start_times = segments_metric['segment_start_time'].values
@@ -632,6 +698,11 @@ def _evaluate_candidates_in_window(
         t2_s = pd.Timestamp(s_t[idx2])
         t2_e = pd.Timestamp(e_t[idx2])
 
+        dur1 = (t1_e - t1_s).total_seconds()
+        dur2 = (t2_e - t2_s).total_seconds()
+        if dur1 > max_segment_duration_s or dur2 > max_segment_duration_s:
+            continue
+
         cpa_res = compute_segment_cpa(
             starts[idx1], ends[idx1], t1_s, t1_e,
             starts[idx2], ends[idx2], t2_s, t2_e
@@ -641,6 +712,19 @@ def _evaluate_candidates_in_window(
 
         cpa_dist_m, cpa_time, p1_cpa, p2_cpa, mid_cpa, heading1, heading2, speed1, speed2, enc_type, ds_start, ds_end, dv_along = cpa_res
         if cpa_dist_m > max_distance_m:
+            continue
+
+        prox_interval = compute_proximity_interval(
+            starts[idx1], ends[idx1], t1_s, t1_e,
+            starts[idx2], ends[idx2], t2_s, t2_e,
+            max_distance_m=max_distance_m,
+        )
+        if prox_interval is None:
+            continue
+
+        prox_start, prox_end = prox_interval
+        # Require encounter proximity to overlap the current window
+        if prox_start > t_end or prox_end < t_start:
             continue
 
         is_stat_1 = bool(speed1 < min_moving_speed)
@@ -709,8 +793,8 @@ def _evaluate_candidates_in_window(
             'is_stationary_1': is_stat_1,
             'is_stationary_2': is_stat_2,
             'stationary_role': stat_role,
-            'start_time': max(t1_s, t2_s),
-            'end_time': min(t1_e, t2_e),
+            'start_time': prox_start,
+            'end_time': prox_end,
             'cpa_time': cpa_time,
             'min_distance_m': cpa_dist_m,
             'encounter_type': enc_type,
@@ -741,6 +825,7 @@ def detect_encounters(
     fairway_axis: Optional[FairwayAxis] = None,
     metric_crs: Optional[str] = None,
     client: Optional[Client] = None,
+    max_segment_duration_s: float = 1800.0,
 ) -> gpd.GeoDataFrame:
     """
     Detect encounters (crossings, overtakings, head-on meetings) between vessels.
@@ -833,7 +918,7 @@ def detect_encounters(
         tasks = [
             dask.delayed(_evaluate_candidates_in_window)(
                 scattered_metric, w[0], w[1], max_distance_m, fairway_axis, merge_gap_minutes,
-                exclude_stationary, min_moving_speed
+                exclude_stationary, min_moving_speed, max_segment_duration_s
             )
             for w in windows
         ]
@@ -845,7 +930,7 @@ def detect_encounters(
             raw_records.extend(
                 _evaluate_candidates_in_window(
                     segments_metric, w[0], w[1], max_distance_m, fairway_axis, merge_gap_minutes,
-                    exclude_stationary, min_moving_speed
+                    exclude_stationary, min_moving_speed, max_segment_duration_s
                 )
             )
 
@@ -1302,6 +1387,7 @@ def run_encounter_detection(
     scheduler: Optional[str] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
+    max_segment_duration_s: float = 1800.0,
 ) -> None:
     """CLI/script entry point: detect_encounters, reading and writing GeoParquet files."""
     client = None
@@ -1313,17 +1399,25 @@ def run_encounter_detection(
     logger.info(f"Loading segments from {segments_file}...")
     segments_gdf = gpd.read_parquet(segments_file)
 
-    if start_time is not None:
-        start_ts = to_utc_datetime(start_time)
-        segments_gdf['segment_start_time'] = to_utc_datetime(segments_gdf['segment_start_time'])
-        segments_gdf = segments_gdf[segments_gdf['segment_start_time'] >= start_ts]
-        logger.info(f"Filtered segments by start_time >= {start_ts}: {len(segments_gdf):,} segments remaining.")
+    if 'segment_end_time' not in segments_gdf.columns and 'segment_duration_s' in segments_gdf.columns:
+        segments_gdf['segment_end_time'] = to_utc_datetime(segments_gdf['segment_start_time']) + pd.to_timedelta(segments_gdf['segment_duration_s'], unit='s')
 
-    if end_time is not None:
-        end_ts = to_utc_datetime(end_time)
+    start_ts = to_utc_datetime(start_time) if start_time is not None else None
+    end_ts = to_utc_datetime(end_time) if end_time is not None else None
+
+    if start_ts is not None:
+        segments_gdf['segment_start_time'] = to_utc_datetime(segments_gdf['segment_start_time'])
+        if 'segment_end_time' in segments_gdf.columns:
+            segments_gdf['segment_end_time'] = to_utc_datetime(segments_gdf['segment_end_time'])
+            segments_gdf = segments_gdf[segments_gdf['segment_end_time'] >= start_ts]
+        else:
+            segments_gdf = segments_gdf[segments_gdf['segment_start_time'] >= start_ts]
+        logger.info(f"Filtered segments by end_time >= {start_ts}: {len(segments_gdf):,} segments remaining.")
+
+    if end_ts is not None:
         segments_gdf['segment_start_time'] = to_utc_datetime(segments_gdf['segment_start_time'])
         segments_gdf = segments_gdf[segments_gdf['segment_start_time'] < end_ts]
-        logger.info(f"Filtered segments by end_time < {end_ts}: {len(segments_gdf):,} segments remaining.")
+        logger.info(f"Filtered segments by start_time < {end_ts}: {len(segments_gdf):,} segments remaining.")
 
     axis_obj = None
     if fairway_axis is not None:
@@ -1353,7 +1447,14 @@ def run_encounter_detection(
         fairway_axis=axis_obj,
         metric_crs=metric_crs,
         client=client,
+        max_segment_duration_s=max_segment_duration_s,
     )
+
+    if start_ts is not None and not events_gdf.empty:
+        events_gdf = events_gdf[events_gdf['cpa_time'] >= start_ts].reset_index(drop=True)
+    if end_ts is not None and not events_gdf.empty:
+        events_gdf = events_gdf[events_gdf['cpa_time'] < end_ts].reset_index(drop=True)
+
     logger.info(f"Found {len(events_gdf):,} encounter events.")
 
     output_file.parent.mkdir(parents=True, exist_ok=True)

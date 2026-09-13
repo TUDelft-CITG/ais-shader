@@ -1015,6 +1015,7 @@ def run_segment_generation(
     epoch_time: bool = False,
     vessel_codes_json: Path = None,
     metric_crs: Optional[str] = None,
+    max_segment_duration_s: float = 1800.0,
 ):
     """
     Generate point-pair line segments from trajectorized point dataset,
@@ -1080,6 +1081,14 @@ def run_segment_generation(
     df_segments['sog'] = clean_sog(p1['sog'].values, raw_units=sog_raw_units)
 
     df_segments['segment_duration_s'] = (df_segments['segment_end_time'] - df_segments['segment_start_time']).dt.total_seconds()
+    if max_segment_duration_s is not None:
+        valid_dur = (df_segments['segment_duration_s'] <= max_segment_duration_s) & (df_segments['segment_duration_s'] >= 0)
+        n_dropped = int((~valid_dur).sum())
+        if n_dropped > 0:
+            logger.info(f"Filtered out {n_dropped:,} segments with tracking gaps > {max_segment_duration_s}s.")
+            df_segments = df_segments[valid_dur].reset_index(drop=True)
+            geoms = geoms[valid_dur.values]
+
     gdf_segments = gpd.GeoDataFrame(df_segments, geometry=geoms, crs="EPSG:4326")
     
     if metric_crs:

@@ -306,7 +306,8 @@ def test_generate_encounter_timeseries():
     # Generate time series sampled every 60s
     ts_gdf = generate_encounter_timeseries(segments_gdf, encounters, step_seconds=60.0)
     assert not ts_gdf.empty
-    assert len(ts_gdf) >= 11
+    assert len(ts_gdf) >= 5
+    assert all(ts_gdf['distance_m'] <= 500.1)
     assert 'geometry' in ts_gdf.columns
     assert ts_gdf.geometry.geom_type.unique().tolist() == ['LineString']
     assert all(ts_gdf['encounter_id'] == 0)

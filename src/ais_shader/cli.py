@@ -581,12 +581,21 @@ def to_linestring(input_file, output_file, vessel_codes_json):
     default=None,
     help="Optional target metric CRS (e.g. EPSG:32615) to project the generated segments into.",
 )
-def to_segment(input_file, output_file, epoch_time, vessel_codes_json, sog_raw_units, metric_crs):
+@click.option(
+    "--max-segment-duration-s",
+    type=float,
+    default=1800.0,
+    help="Maximum tracking gap in seconds to bridge with a segment (default: 1800.0s = 30 min). Longer gaps are dropped.",
+)
+def to_segment(input_file, output_file, epoch_time, vessel_codes_json, sog_raw_units, metric_crs, max_segment_duration_s):
     """
     Generate point-pair line segments from trajectorized point trajectories.
     """
     output_file = output_file or _default_output_path(input_file, "-segments.geoparquet")
-    run_segment_generation(input_file, output_file, sog_raw_units, epoch_time, vessel_codes_json, metric_crs=metric_crs)
+    run_segment_generation(
+        input_file, output_file, sog_raw_units, epoch_time, vessel_codes_json, metric_crs=metric_crs,
+        max_segment_duration_s=max_segment_duration_s
+    )
 
 
 @click.group(name="events")
@@ -756,7 +765,13 @@ def polygon_entry_exit(input_file, polygons_file, polygon_id_col, merge_gap_minu
     default=None,
     help="Optional end timestamp (UTC, e.g. '2026-03-31 03:00:00') to filter input segments.",
 )
-def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fairway_markers, river_name, timeseries_file, timeseries_step, exclude_stationary, stationary_file, min_speed, metric_crs, output_file, scheduler, start_time, end_time):
+@click.option(
+    "--max-segment-duration-s",
+    type=float,
+    default=1800.0,
+    help="Maximum segment duration in seconds to consider for encounters (default: 1800.0s = 30 min). Longer gaps are ignored.",
+)
+def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fairway_markers, river_name, timeseries_file, timeseries_step, exclude_stationary, stationary_file, min_speed, metric_crs, output_file, scheduler, start_time, end_time, max_segment_duration_s):
     """
     Detect vessel encounters (crossings, overtakings, head-on meetings) from a segment table.
     """
@@ -779,6 +794,7 @@ def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fa
         scheduler=scheduler,
         start_time=start_time,
         end_time=end_time,
+        max_segment_duration_s=max_segment_duration_s,
     )
 
 
