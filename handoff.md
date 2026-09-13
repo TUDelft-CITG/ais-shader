@@ -58,15 +58,20 @@
 * `mississippi_1h_trajectories.geoparquet` (0.39 MB): **1,603 continuous LineString trajectories** per trip.
 * `mississippi_1h_segments.geoparquet` (1.56 MB): **43,796 2-point line segments** (gaps $> 1800\text{s}$ dropped).
 * `mississippi_1h_stationary.geoparquet` (1.46 MB): **34,546 stationary segments** across 1,071 vessels.
-* `mississippi_1h_encounters.geoparquet` (0.56 MB): **4,298 encounter events** at exact CPA with `source_mmsi`, `target_mmsi`, roles.
-* `mississippi_1h_timeseries.geoparquet` (3.20 MB): **52,713 dynamic connecting lines** (all $\le 600\text{ m}$) with `source_mmsi`, `target_mmsi`, and stationary flags.
-* Up-to-date QML styles for all 7 layers.
+* `mississippi_1h_encounters.geoparquet` (162 KB): **934 inland encounter events** ($\le 100\text{ m}$ CPA) with `source_mmsi`, `target_mmsi`, roles. Overtaking 477, Crossing 177, Head-on 169, Parallel sailing 111.
+* `mississippi_1h_timeseries.geoparquet` (305 KB): **4,014 dynamic connecting lines** (all $\le 100\text{ m}$) with `source_mmsi`, `target_mmsi`, and stationary flags.
+* Up-to-date QML styles for all 7 layers (single-line, HSV saturation ~0.8, dot fallback, and 100m filters).
 
 #### 2. EURIS 10-Minute Live Crawl (`/scratch-shared/fbaart/data/euris_crawl/`):
 * `euris_crawl_20260913_121627.geoparquet` (223 KB): **12,007 fixes** across 205 vessels.
 * `euris_crawl_20260913_121627_trajectories.geoparquet` (78 KB): **200 continuous LineString trajectories**.
 * `euris_crawl_20260913_121627_segments.geoparquet` (129 KB): **11,802 2-point line segments**.
 * `euris_crawl_20260913_121627.geojson` (5.4 MB) & `.ndjson` (4.0 MB).
+
+### H. Domain Taxonomy: Three Versions of Encounters
+1. **Open Water** *(out of scope)*: Nautical miles ($1 - 2\text{ NM}$ CPA), standard COLREGS on compass bearings.
+2. **Inland without Fairway Axis**: Metric scale ($\le 100\text{ m}$), kinematic relative course ($\text{rel\_angle} \le 45^\circ$, inloop/passing, head-on $\ge 135^\circ$), stationary obstacle identification. Active when `--fairway-markers` is omitted, or as fallback outside corridor.
+3. **Inland with Fairway Axis**: Curvilinear Frenet-Serret coordinates $(s, n)$, upbound/downbound fairway direction, resolving river bend false crossings. Fallback to Mode 2 for traffic outside fairway corridor ($|n| > 3000\text{ m}$). Active when `--fairway-markers` is supplied.
 
 ---
 
