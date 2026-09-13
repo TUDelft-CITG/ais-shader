@@ -428,14 +428,16 @@ def run_polygon_entry_exit_detection(
 
 ENCOUNTER_COLS = [
     'encounter_id',
-    'mmsi_1', 'mmsi_2', 'trip_id_1', 'trip_id_2',
+    'encounter_type',
+    'source_mmsi', 'target_mmsi',
+    'mmsi_1', 'mmsi_2', 'role_1', 'role_2',
+    'trip_id_1', 'trip_id_2',
     'vessel_type_1', 'vessel_type_2', 'vessel_group_1', 'vessel_group_2',
     'length_1', 'length_2', 'width_1', 'width_2',
     'sog_1', 'sog_2', 'speed_mps_1', 'speed_mps_2',
     'heading_1', 'heading_2',
     'is_stationary_1', 'is_stationary_2', 'stationary_role',
     'start_time', 'end_time', 'cpa_time', 'min_distance_m',
-    'encounter_type',
     'overtaking_mmsi', 'overtaken_mmsi',
 ]
 
@@ -771,9 +773,36 @@ def _evaluate_candidates_in_window(
                 overtaking_mmsi = mmsi[idx2]
                 overtaken_mmsi = mmsi[idx1]
 
+        # Determine source (active encountering vessel) vs target (encountered vessel/obstacle)
+        if is_stat_1 and not is_stat_2:
+            source_mmsi = mmsi[idx2]
+            target_mmsi = mmsi[idx1]
+            role_1 = 'stationary'
+            role_2 = 'moving'
+        elif is_stat_2 and not is_stat_1:
+            source_mmsi = mmsi[idx1]
+            target_mmsi = mmsi[idx2]
+            role_1 = 'moving'
+            role_2 = 'stationary'
+        elif enc_type == 'overtaking' and overtaking_mmsi:
+            source_mmsi = str(overtaking_mmsi)
+            target_mmsi = str(overtaken_mmsi)
+            role_1 = 'overtaking' if mmsi[idx1] == source_mmsi else 'overtaken'
+            role_2 = 'overtaking' if mmsi[idx2] == source_mmsi else 'overtaken'
+        else:
+            source_mmsi = mmsi[idx1]
+            target_mmsi = mmsi[idx2]
+            role_1 = 'moving' if not is_stat_1 else 'stationary'
+            role_2 = 'moving' if not is_stat_2 else 'stationary'
+
         rec = {
+            'encounter_type': enc_type,
+            'source_mmsi': source_mmsi,
+            'target_mmsi': target_mmsi,
             'mmsi_1': mmsi[idx1],
             'mmsi_2': mmsi[idx2],
+            'role_1': role_1,
+            'role_2': role_2,
             'trip_id_1': trip_ids[idx1] if trip_ids is not None else None,
             'trip_id_2': trip_ids[idx2] if trip_ids is not None else None,
             'vessel_type_1': v_types[idx1] if v_types is not None else None,
@@ -797,7 +826,6 @@ def _evaluate_candidates_in_window(
             'end_time': prox_end,
             'cpa_time': cpa_time,
             'min_distance_m': cpa_dist_m,
-            'encounter_type': enc_type,
             'overtaking_mmsi': overtaking_mmsi,
             'overtaken_mmsi': overtaken_mmsi,
             '_mid_x': float(mid_cpa[0]),
@@ -1052,8 +1080,15 @@ def _merge_encounters(raw_df: pd.DataFrame, merge_gap_minutes: float) -> list:
 TIMESERIES_COLS = [
     'encounter_id',
     'encounter_type',
+    'source_mmsi',
+    'target_mmsi',
     'mmsi_1',
     'mmsi_2',
+    'role_1',
+    'role_2',
+    'is_stationary_1',
+    'is_stationary_2',
+    'stationary_role',
     'timestamp',
     'distance_m',
     'is_cpa',
@@ -1164,6 +1199,13 @@ def _generate_encounter_timeseries_chunk(
         mmsi_1 = str(enc_row['mmsi_1'])
         mmsi_2 = str(enc_row['mmsi_2'])
         enc_type = enc_row.get('encounter_type')
+        source_mmsi = enc_row.get('source_mmsi', mmsi_1)
+        target_mmsi = enc_row.get('target_mmsi', mmsi_2)
+        role_1 = enc_row.get('role_1', 'moving')
+        role_2 = enc_row.get('role_2', 'moving')
+        is_stat_1 = bool(enc_row.get('is_stationary_1', False))
+        is_stat_2 = bool(enc_row.get('is_stationary_2', False))
+        stat_role = enc_row.get('stationary_role', 'none')
 
         if mmsi_1 not in lookup or mmsi_2 not in lookup:
             continue
@@ -1240,8 +1282,15 @@ def _generate_encounter_timeseries_chunk(
             rec = {
                 'encounter_id': enc_id,
                 'encounter_type': enc_type,
+                'source_mmsi': source_mmsi,
+                'target_mmsi': target_mmsi,
                 'mmsi_1': mmsi_1,
                 'mmsi_2': mmsi_2,
+                'role_1': role_1,
+                'role_2': role_2,
+                'is_stationary_1': is_stat_1,
+                'is_stationary_2': is_stat_2,
+                'stationary_role': stat_role,
                 'timestamp': sub_grid[k],
                 'distance_m': round(d_val, 2),
                 'is_cpa': bool(is_cpa_arr[k]),

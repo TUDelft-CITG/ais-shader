@@ -406,6 +406,47 @@ def test_detect_encounters_exclude_stationary_modes():
     assert set(stat_vessels['MMSI']) == {'111', '222'}
 
 
+def test_encounter_roles_and_timeseries_attributes():
+    # Moving vessel '333' passing stationary vessel '111'
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            # Ship 1: stationary at (0, 50)
+            _make_segment('111', 'ship1', (0.0, 50.0), (0.0, 50.0), '2026-06-14 12:00:00', 600, sog=0.0),
+            # Ship 2: moving past at (0.001, 50.0) -> (0.001, 50.01)
+            _make_segment('333', 'ship2', (0.001, 50.0), (0.001, 50.01), '2026-06-14 12:00:00', 600, sog=10.0),
+        ],
+        crs="EPSG:4326"
+    )
+
+    encounters = detect_encounters(segments_gdf, max_distance_m=500.0, exclude_stationary='both')
+    assert len(encounters) == 1
+    enc = encounters.iloc[0]
+
+    assert enc['mmsi_1'] == '111'
+    assert enc['mmsi_2'] == '333'
+    assert enc['source_mmsi'] == '333'  # Active moving vessel
+    assert enc['target_mmsi'] == '111'  # Stationary target obstacle
+    assert enc['role_1'] == 'stationary'
+    assert enc['role_2'] == 'moving'
+    assert bool(enc['is_stationary_1']) is True
+    assert bool(enc['is_stationary_2']) is False
+
+    # Generate timeseries
+    ts = generate_encounter_timeseries(segments_gdf, encounters, step_seconds=60.0)
+    assert not ts.empty
+    assert 'source_mmsi' in ts.columns
+    assert 'target_mmsi' in ts.columns
+    assert 'role_1' in ts.columns
+    assert 'role_2' in ts.columns
+    assert 'is_stationary_1' in ts.columns
+    assert 'is_stationary_2' in ts.columns
+    assert all(ts['source_mmsi'] == '333')
+    assert all(ts['target_mmsi'] == '111')
+    assert all(ts['is_stationary_1'] == True)
+    assert all(ts['is_stationary_2'] == False)
+
+
+
 
 
 
