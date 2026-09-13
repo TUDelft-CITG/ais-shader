@@ -59,14 +59,19 @@ TRAJECTORIZED_POINTS_QML = f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
               <Option name="properties" type="Map">
+                <Option name="name" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360), 'circle', 'arrow')"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
                 <Option name="angle" type="Map">
                   <Option name="active" type="bool" value="true"/>
-                  <Option name="expression" type="QString" value="coalesce(&quot;heading&quot;, &quot;cog&quot;, 0)"/>
+                  <Option name="expression" type="QString" value="coalesce(if(&quot;heading&quot; &lt; 360, &quot;heading&quot;, null), if(&quot;cog&quot; &lt; 360, &quot;cog&quot;, null), 0)"/>
                   <Option name="type" type="int" value="3"/>
                 </Option>
                 <Option name="size" type="Map">
                   <Option name="active" type="bool" value="true"/>
-                  <Option name="expression" type="QString" value="coalesce(&quot;length&quot;, 25)"/>
+                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360), coalesce(&quot;beam&quot;, 12), coalesce(&quot;length&quot;, 25))"/>
                   <Option name="type" type="int" value="3"/>
                 </Option>
               </Option>
@@ -473,7 +478,7 @@ def make_segments_qml():
     sym_str = "\n".join(symbols_xml)
     return f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
 <qgis layerType="Vector" styleCategories="Symbology|Temporal" version="4.2.1-Belém do Pará">
-  <temporal accumulate="0" durationField="MMSI" durationUnit="min" enabled="1" endExpression="&quot;segment_end_time&quot; + make_interval(minutes:=15)" endField="segment_end_time" fixedDuration="0" limitMode="0" mode="4" startExpression="" startField="segment_start_time">
+  <temporal accumulate="0" durationField="MMSI" durationUnit="min" enabled="1" endExpression="&quot;segment_end_time&quot; + make_interval(minutes:=15)" endField="segment_end_time" fixedDuration="0" limitMode="0" mode="4" startExpression="&quot;segment_start_time&quot;" startField="segment_start_time">
     <fixedRange>
       <start></start>
       <end></end>

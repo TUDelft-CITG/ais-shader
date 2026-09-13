@@ -11,7 +11,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean deep nautical teal dashed fairway line -->
-        <layer class="SimpleLine" enabled="1" id="{27f13d59-783b-4e08-80bc-7daed85a601d}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{4c1b5b07-abc3-46dd-bfbd-f7972bf394b1}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="flat"/>
