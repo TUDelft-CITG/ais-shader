@@ -67,6 +67,7 @@ async def crawl_euris(
     ndjson_path = output_dir / f"euris_crawl_{timestamp_tag}.ndjson"
     parquet_path = output_dir / f"euris_crawl_{timestamp_tag}.geoparquet"
     geojson_path = output_dir / f"euris_crawl_{timestamp_tag}.geojson"
+    gpkg_path = output_dir / f"euris_crawl_{timestamp_tag}.gpkg"
 
     logger.info("=" * 75)
     logger.info("Starting EURIS AIS Live Crawl")
@@ -189,6 +190,9 @@ async def crawl_euris(
         logger.info(f"Saving GeoParquet dataset to {parquet_path}...")
         gdf.to_parquet(parquet_path)
 
+        logger.info(f"Saving GeoPackage dataset to {gpkg_path}...")
+        gdf.to_file(gpkg_path, layer="raw_points", driver="GPKG")
+
         logger.info(f"Saving GeoJSON snapshot to {geojson_path}...")
         gdf.to_file(geojson_path, driver="GeoJSON")
 
@@ -196,6 +200,7 @@ async def crawl_euris(
         logger.info("EURIS AIS Crawl Completed Successfully!")
         logger.info(f"Total fixes recorded: {len(gdf):,}")
         logger.info(f"Total unique vessels: {gdf['mmsi'].nunique():,}")
+        logger.info(f"Output GeoPackage: {gpkg_path} ({gpkg_path.stat().st_size / 1024:.1f} KB)")
         logger.info(f"Output GeoParquet: {parquet_path} ({parquet_path.stat().st_size / 1024:.1f} KB)")
         logger.info(f"Output NDJSON: {ndjson_path} ({ndjson_path.stat().st_size / 1024:.1f} KB)")
         logger.info(f"Output GeoJSON: {geojson_path} ({geojson_path.stat().st_size / 1024:.1f} KB)")
