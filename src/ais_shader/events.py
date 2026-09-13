@@ -1430,6 +1430,8 @@ def run_encounter_detection(
     if stationary_file is not None:
         logger.info(f"Extracting stationary/anchored vessels (min_speed={min_moving_speed} m/s)...")
         stat_gdf = extract_stationary_vessels(segments_gdf, fairway_axis=axis_obj, min_moving_speed=min_moving_speed)
+        if stat_gdf.crs is not None and str(stat_gdf.crs) != "EPSG:4326":
+            stat_gdf = stat_gdf.to_crs("EPSG:4326")
         vessel_cnt = stat_gdf['MMSI'].nunique() if not stat_gdf.empty else 0
         logger.info(f"Found {len(stat_gdf):,} stationary segments across {vessel_cnt:,} vessels.")
         stationary_file.parent.mkdir(parents=True, exist_ok=True)
