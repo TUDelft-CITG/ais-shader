@@ -471,6 +471,137 @@ def make_vesselgroup_line_qml(layer_type_name, start_field, end_field, line_widt
 """
 
 # ---------------------------------------------------------------------------
+# 4b. segments.qml
+# LineString segments with 15min trailing tail temporal expression,
+# categorized by VesselGroup with subtle white casing.
+# ---------------------------------------------------------------------------
+def make_segments_qml(line_width=0.40, casing_width=0.80):
+    categories_xml = []
+    symbols_xml = []
+    for idx, (label, color_val) in enumerate(VESSEL_GROUPS):
+        type_attr = "NULL" if label == "NULL" else "string"
+        value_attr = "NULL" if label == "NULL" else label
+        lbl = "" if label == "NULL" else label
+        categories_xml.append(f'      <category label="{lbl}" render="true" symbol="{idx}" type="{type_attr}" uuid="{uid()}" value="{value_attr}"/>')
+        symbols_xml.append(f"""      <symbol alpha="1" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="{idx}" type="line">
+        <data_defined_properties>
+          <Option type="Map">
+            <Option name="name" type="QString" value=""/>
+            <Option name="properties"/>
+            <Option name="type" type="QString" value="collection"/>
+          </Option>
+        </data_defined_properties>
+        <!-- Subtle thin white outline casing -->
+        <layer class="SimpleLine" enabled="1" id="{uid()}" locked="0" pass="0">
+          <Option type="Map">
+            <Option name="align_dash_pattern" type="QString" value="0"/>
+            <Option name="capstyle" type="QString" value="round"/>
+            <Option name="customdash" type="QString" value="5;2"/>
+            <Option name="customdash_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="customdash_unit" type="QString" value="MM"/>
+            <Option name="draw_inside_polygon" type="QString" value="0"/>
+            <Option name="joinstyle" type="QString" value="round"/>
+            <Option name="line_color" type="QString" value="255,255,255,210,rgb:1,1,1,0.82352941"/>
+            <Option name="line_style" type="QString" value="solid"/>
+            <Option name="line_width" type="QString" value="{casing_width}"/>
+            <Option name="line_width_unit" type="QString" value="MM"/>
+            <Option name="offset" type="QString" value="0"/>
+            <Option name="offset_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="offset_unit" type="QString" value="MM"/>
+            <Option name="ring_filter" type="QString" value="0"/>
+            <Option name="trim_distance_end" type="QString" value="0"/>
+            <Option name="trim_distance_end_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="trim_distance_end_unit" type="QString" value="MM"/>
+            <Option name="trim_distance_start" type="QString" value="0"/>
+            <Option name="trim_distance_start_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="trim_distance_start_unit" type="QString" value="MM"/>
+            <Option name="tweak_dash_pattern_on_corners" type="QString" value="0"/>
+            <Option name="use_custom_dash" type="QString" value="0"/>
+            <Option name="width_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+          </Option>
+          <data_defined_properties>
+            <Option type="Map">
+              <Option name="name" type="QString" value=""/>
+              <Option name="properties"/>
+              <Option name="type" type="QString" value="collection"/>
+            </Option>
+          </data_defined_properties>
+        </layer>
+        <!-- High saturation line -->
+        <layer class="SimpleLine" enabled="1" id="{uid()}" locked="0" pass="1">
+          <Option type="Map">
+            <Option name="align_dash_pattern" type="QString" value="0"/>
+            <Option name="capstyle" type="QString" value="round"/>
+            <Option name="customdash" type="QString" value="5;2"/>
+            <Option name="customdash_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="customdash_unit" type="QString" value="MM"/>
+            <Option name="draw_inside_polygon" type="QString" value="0"/>
+            <Option name="joinstyle" type="QString" value="round"/>
+            <Option name="line_color" type="QString" value="{color_val}"/>
+            <Option name="line_style" type="QString" value="solid"/>
+            <Option name="line_width" type="QString" value="{line_width}"/>
+            <Option name="line_width_unit" type="QString" value="MM"/>
+            <Option name="offset" type="QString" value="0"/>
+            <Option name="offset_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="offset_unit" type="QString" value="MM"/>
+            <Option name="ring_filter" type="QString" value="0"/>
+            <Option name="trim_distance_end" type="QString" value="0"/>
+            <Option name="trim_distance_end_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="trim_distance_end_unit" type="QString" value="MM"/>
+            <Option name="trim_distance_start" type="QString" value="0"/>
+            <Option name="trim_distance_start_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="trim_distance_start_unit" type="QString" value="MM"/>
+            <Option name="tweak_dash_pattern_on_corners" type="QString" value="0"/>
+            <Option name="use_custom_dash" type="QString" value="0"/>
+            <Option name="width_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+          </Option>
+          <data_defined_properties>
+            <Option type="Map">
+              <Option name="name" type="QString" value=""/>
+              <Option name="properties"/>
+              <Option name="type" type="QString" value="collection"/>
+            </Option>
+          </data_defined_properties>
+        </layer>
+      </symbol>""")
+
+    cat_str = "\n".join(categories_xml)
+    sym_str = "\n".join(symbols_xml)
+    return f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis layerType="Vector" styleCategories="Symbology|Temporal" version="4.2.1-Belém do Pará">
+  <temporal accumulate="1" durationField="MMSI" durationUnit="min" enabled="1" endExpression="segment_end_time" endField="segment_end_time" fixedDuration="0" limitMode="0" mode="4" startExpression="&quot;segment_end_time&quot; - make_interval(seconds:= &#xa;&#x9;min(&#xa;&#x9;&#x9;second(make_interval( minutes:=15)), &#xa;&#x9;&#x9;second(&quot;segment_end_time&quot; - &quot;segment_start_time&quot;)&#xa;&#x9;)&#xa;)" startField="segment_start_time">
+    <fixedRange>
+      <start></start>
+      <end></end>
+    </fixedRange>
+  </temporal>
+  <renderer-v2 attr="VesselGroup" enableorderby="0" forceraster="0" referencescale="-1" symbollevels="1" type="categorizedSymbol">
+    <categories>
+{cat_str}
+    </categories>
+    <symbols>
+{sym_str}
+    </symbols>
+    <rotation/>
+    <sizescale/>
+    <data-defined-properties>
+      <Option type="Map">
+        <Option name="name" type="QString" value=""/>
+        <Option name="properties"/>
+        <Option name="type" type="QString" value="collection"/>
+      </Option>
+    </data-defined-properties>
+  </renderer-v2>
+  <selection mode="Default">
+    <selectionColor invalid="1"/>
+  </selection>
+  <blendMode>0</blendMode>
+  <featureBlendMode>0</featureBlendMode>
+  <layerGeometryType>1</layerGeometryType>
+</qgis>
+"""
+
+# ---------------------------------------------------------------------------
 # 5. fairway_centerline.qml
 # Nautical dashed navigation fairway track with subtle white halo casing.
 # ---------------------------------------------------------------------------
@@ -663,6 +794,7 @@ def main():
         "encounters.qml": make_encounters_qml(),
         "timeseries.qml": make_timeseries_qml(),
         "trajectories.qml": make_vesselgroup_line_qml("trajectories", "TrackStartTime", "TrackEndTime", line_width=0.45, casing_width=0.85),
+        "segments.qml": make_segments_qml(line_width=0.40, casing_width=0.80),
         "stationary.qml": make_vesselgroup_line_qml("stationary", "segment_start_time", "segment_end_time", line_width=0.55, casing_width=0.95),
         "fairway_centerline.qml": FAIRWAY_CENTERLINE_QML,
         "fairway_mile_markers.qml": FAIRWAY_MILE_MARKERS_QML,
@@ -683,6 +815,7 @@ def main():
             "mississippi_1h_encounters.qml": "encounters.qml",
             "mississippi_1h_timeseries.qml": "timeseries.qml",
             "mississippi_1h_trajectories.qml": "trajectories.qml",
+            "mississippi_1h_segments.qml": "segments.qml",
             "mississippi_1h_stationary.qml": "stationary.qml",
             "mississippi_fairway_centerline.qml": "fairway_centerline.qml",
             "mississippi_fairway_mile_markers.qml": "fairway_mile_markers.qml",
