@@ -673,18 +673,157 @@ FAIRWAY_MILE_MARKERS_QML = f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 
 </qgis>
 """
 
+# ---------------------------------------------------------------------------
+# 7. fairway_sections.qml
+# Rijkswaterstaat FIS Layer 58 fairway links with labeling
+# ---------------------------------------------------------------------------
+FAIRWAY_SECTIONS_QML = f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis layerType="Vector" styleCategories="Symbology|Labeling" version="4.2.1-Belém do Pará">
+  <renderer-v2 enableorderby="0" forceraster="0" referencescale="-1" symbollevels="0" type="singleSymbol">
+    <symbols>
+      <symbol alpha="0.8" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="0" type="line">
+        <data_defined_properties>
+          <Option type="Map">
+            <Option name="name" type="QString" value=""/>
+            <Option name="properties"/>
+            <Option name="type" type="QString" value="collection"/>
+          </Option>
+        </data_defined_properties>
+        <layer class="SimpleLine" enabled="1" id="{uid()}" locked="0" pass="0">
+          <Option type="Map">
+            <Option name="align_dash_pattern" type="QString" value="0"/>
+            <Option name="capstyle" type="QString" value="round"/>
+            <Option name="customdash" type="QString" value="5;2"/>
+            <Option name="customdash_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="customdash_unit" type="QString" value="MM"/>
+            <Option name="draw_inside_polygon" type="QString" value="0"/>
+            <Option name="joinstyle" type="QString" value="round"/>
+            <Option name="line_color" type="QString" value="14,165,233,220,hsv:0.553,0.940,0.914,0.863"/>
+            <Option name="line_style" type="QString" value="solid"/>
+            <Option name="line_width" type="QString" value="0.5"/>
+            <Option name="line_width_unit" type="QString" value="MM"/>
+            <Option name="offset" type="QString" value="0"/>
+            <Option name="offset_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="offset_unit" type="QString" value="MM"/>
+            <Option name="ring_filter" type="QString" value="0"/>
+            <Option name="trim_distance_end" type="QString" value="0"/>
+            <Option name="trim_distance_end_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="trim_distance_end_unit" type="QString" value="MM"/>
+            <Option name="trim_distance_start" type="QString" value="0"/>
+            <Option name="trim_distance_start_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+            <Option name="trim_distance_start_unit" type="QString" value="MM"/>
+            <Option name="tweak_dash_pattern_on_corners" type="QString" value="0"/>
+            <Option name="use_custom_dash" type="QString" value="0"/>
+            <Option name="width_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
+          </Option>
+          <data_defined_properties>
+            <Option type="Map">
+              <Option name="name" type="QString" value=""/>
+              <Option name="properties"/>
+              <Option name="type" type="QString" value="collection"/>
+            </Option>
+          </data_defined_properties>
+        </layer>
+      </symbol>
+    </symbols>
+    <rotation/>
+    <sizescale/>
+    <data-defined-properties>
+      <Option type="Map">
+        <Option name="name" type="QString" value=""/>
+        <Option name="properties"/>
+        <Option name="type" type="QString" value="collection"/>
+      </Option>
+    </data-defined-properties>
+  </renderer-v2>
+  <labeling type="simple">
+    <settings calloutType="simple">
+      <text-style blendMode="0" fieldName="concat(coalesce(&quot;fairway_name&quot;, &quot;name&quot;), ' (km ', to_string(round(&quot;routekmbegin&quot;, 1)), '-', to_string(round(&quot;routekmend&quot;, 1)), ')') " fontFamily="Sans-Serif" fontSize="7" fontSizeUnit="Point" fontWeight="50" isExpression="1" textColor="255,255,255,255">
+        <text-buffer bufferColor="15,23,42,220" bufferDraw="1" bufferJoinStyle="128" bufferSize="0.8" bufferSizeUnits="MM"/>
+      </text-style>
+      <placement dist="1.0" distUnits="MM" maxCurvedCharAngleIn="25" maxCurvedCharAngleOut="-25" placement="2" priority="5" repeatDistance="150" repeatDistanceUnits="MM"/>
+      <rendering displayAll="0" fontMinPixelSize="3" obstacle="1" scaleMax="0" scaleMin="100000" scaleVisibility="1"/>
+    </settings>
+  </labeling>
+  <selection mode="Default">
+    <selectionColor invalid="1"/>
+  </selection>
+  <blendMode>0</blendMode>
+  <featureBlendMode>0</featureBlendMode>
+  <layerGeometryType>1</layerGeometryType>
+</qgis>
+"""
+
+import sqlite3
+
+def embed_gpkg_layer_styles(gpkg_path: str, styles: dict):
+    """Embed QML styles directly into the GeoPackage SQLite layer_styles table."""
+    if not os.path.exists(gpkg_path):
+        return
+    print(f"\nEmbedding styles into GeoPackage: {gpkg_path}")
+    conn = sqlite3.connect(gpkg_path)
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS layer_styles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        f_table_catalog TEXT DEFAULT '',
+        f_table_schema TEXT DEFAULT '',
+        f_table_name TEXT NOT NULL,
+        f_geometry_column TEXT,
+        styleName TEXT,
+        styleQML TEXT,
+        styleSLD TEXT,
+        useAsDefault BOOLEAN,
+        description TEXT,
+        owner TEXT,
+        ui TEXT,
+        update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+    cur.execute("SELECT table_name, column_name FROM gpkg_geometry_columns")
+    geom_cols = dict(cur.fetchall())
+
+    for layer_name, qml_content in styles.items():
+        if layer_name not in geom_cols:
+            continue
+        geom_col = geom_cols[layer_name]
+        cur.execute("DELETE FROM layer_styles WHERE f_table_name = ? AND styleName = 'default'", (layer_name,))
+        cur.execute("""
+        INSERT INTO layer_styles (
+            f_table_catalog, f_table_schema, f_table_name, f_geometry_column,
+            styleName, styleQML, styleSLD, useAsDefault, description, owner, ui
+        ) VALUES ('', '', ?, ?, 'default', ?, '', 1, 'Default QGIS styling with temporal controller configuration', 'ais-shader', '')
+        """, (layer_name, geom_col, qml_content.strip()))
+        print(f"  -> Embedded default style for layer: {layer_name}")
+    conn.commit()
+    conn.close()
+
+
 def main():
     os.makedirs(STYLES_DIR, exist_ok=True)
 
+    points_qml = TRAJECTORIZED_POINTS_QML
+    enc_qml = make_encounters_qml()
+    ts_qml = make_timeseries_qml()
+    traj_qml = make_vesselgroup_line_qml("trajectories", "TrackStartTime", "TrackEndTime", line_width=0.45)
+    segs_qml = make_segments_qml()
+    stat_qml = make_vesselgroup_line_qml("stationary", "segment_start_time", "segment_end_time", line_width=0.50)
+    stat_vessels_qml = make_vesselgroup_line_qml("stationary_vessels", "segment_start_time", "segment_end_time", line_width=0.50)
+    fairway_qml = FAIRWAY_CENTERLINE_QML
+    sections_qml = FAIRWAY_SECTIONS_QML
+    markers_qml = FAIRWAY_MILE_MARKERS_QML
+
     styles = {
-        "trajectorized_points.qml": TRAJECTORIZED_POINTS_QML,
-        "encounters.qml": make_encounters_qml(),
-        "timeseries.qml": make_timeseries_qml(),
-        "trajectories.qml": make_vesselgroup_line_qml("trajectories", "TrackStartTime", "TrackEndTime", line_width=0.45),
-        "segments.qml": make_segments_qml(),
-        "stationary.qml": make_vesselgroup_line_qml("stationary", "segment_start_time", "segment_end_time", line_width=0.50),
-        "fairway_centerline.qml": FAIRWAY_CENTERLINE_QML,
-        "fairway_mile_markers.qml": FAIRWAY_MILE_MARKERS_QML,
+        "trajectorized_points.qml": points_qml,
+        "encounters.qml": enc_qml,
+        "timeseries.qml": ts_qml,
+        "trajectories.qml": traj_qml,
+        "segments.qml": segs_qml,
+        "stationary.qml": stat_qml,
+        "stationary_vessels.qml": stat_vessels_qml,
+        "fairway_centerline.qml": fairway_qml,
+        "fairway_sections.qml": sections_qml,
+        "fairway_mile_markers.qml": markers_qml,
     }
 
     print(f"Writing styles to {STYLES_DIR}:")
@@ -694,7 +833,7 @@ def main():
             f.write(content.strip() + "\n")
         print(f"  -> {fname} ({len(content)} bytes)")
 
-    # Also copy alongside geoparquet datasets in DATA_DIR for automatic QGIS loading
+    # 1. Copy styles to Mississippi directory
     if os.path.exists(DATA_DIR):
         print(f"\nCopying styles to {DATA_DIR} with matching basenames:")
         dataset_style_mapping = {
@@ -712,6 +851,44 @@ def main():
             dst_path = os.path.join(DATA_DIR, target_name)
             shutil.copyfile(src_path, dst_path)
             print(f"  -> {target_name}")
+
+    # 2. Copy styles to EURIS directory and embed directly into GeoPackages
+    euris_dir = "/scratch-shared/fbaart/data/euris_crawl"
+    if os.path.exists(euris_dir):
+        print(f"\nCopying styles to {euris_dir}:")
+        euris_layer_styles = {
+            "fairway_centerline": fairway_qml,
+            "fairway_sections": sections_qml,
+            "trajectorized_points": points_qml,
+            "segments": segs_qml,
+            "stationary_vessels": stat_vessels_qml,
+            "encounters": enc_qml,
+            "timeseries": ts_qml,
+        }
+
+        # Save generic sidecar QMLs in euris directory
+        for layer_name, qml_content in euris_layer_styles.items():
+            # Generic <layer>.qml
+            p1 = os.path.join(euris_dir, f"{layer_name}.qml")
+            with open(p1, "w", encoding="utf-8") as f:
+                f.write(qml_content.strip() + "\n")
+            # Prefixed euris_encounters_<layer>.qml
+            p2 = os.path.join(euris_dir, f"euris_encounters_{layer_name}.qml")
+            with open(p2, "w", encoding="utf-8") as f:
+                f.write(qml_content.strip() + "\n")
+            print(f"  -> {layer_name}.qml & euris_encounters_{layer_name}.qml")
+
+        # Embed into all master euris GeoPackages
+        gpkgs = [
+            os.path.join(euris_dir, "euris_encounters.gpkg"),
+            os.path.join(euris_dir, "euris_encounters_20260913_174753.gpkg"),
+        ]
+        for gpkg in gpkgs:
+            if os.path.exists(gpkg):
+                embed_gpkg_layer_styles(gpkg, euris_layer_styles)
+
+    print("\nQGIS styles and temporal axes generation complete!")
+
 
 if __name__ == "__main__":
     main()

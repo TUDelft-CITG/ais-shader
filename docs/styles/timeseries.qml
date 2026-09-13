@@ -9,12 +9,12 @@
   </temporal>
   <renderer-v2 attr="encounter_type" enableorderby="0" forceraster="0" referencescale="-1" symbollevels="0" type="categorizedSymbol">
     <categories>
-      <category label="crossing" render="true" symbol="0" type="string" uuid="{0217ab94-92da-4036-936e-3c8bb8b5ed2f}" value="crossing"/>
-      <category label="head-on" render="true" symbol="1" type="string" uuid="{cee00f02-c86d-4fba-aba3-4baeabacd700}" value="head-on"/>
-      <category label="overtaking" render="true" symbol="2" type="string" uuid="{20fd0737-8cb4-4e61-821e-14286621f1f7}" value="overtaking"/>
-      <category label="parallel_sailing" render="true" symbol="3" type="string" uuid="{5668b209-5065-44ad-b1ad-fb3b11d32c2f}" value="parallel_sailing"/>
-      <category label="stationary" render="true" symbol="4" type="string" uuid="{cd330fbf-a9fd-4b81-96cb-de4b5356ee83}" value="stationary"/>
-      <category label="" render="true" symbol="5" type="NULL" uuid="{d5ac569a-350a-40e1-ab7c-41c4a9da5fff}" value="NULL"/>
+      <category label="crossing" render="true" symbol="0" type="string" uuid="{c7b51e5c-97e0-4c10-8bf8-1f8f516701bb}" value="crossing"/>
+      <category label="head-on" render="true" symbol="1" type="string" uuid="{16ad9d50-5775-4064-808d-0a64a1b1af66}" value="head-on"/>
+      <category label="overtaking" render="true" symbol="2" type="string" uuid="{e61edadd-dcfc-44f3-b716-a44da1de1f29}" value="overtaking"/>
+      <category label="parallel_sailing" render="true" symbol="3" type="string" uuid="{74463189-e9e2-42fe-935b-19a9833b19c4}" value="parallel_sailing"/>
+      <category label="stationary" render="true" symbol="4" type="string" uuid="{5c4721d8-5a5d-4692-9e92-d00971b5e2ba}" value="stationary"/>
+      <category label="" render="true" symbol="5" type="NULL" uuid="{cc573e0f-0312-447e-b62a-c4e90fb49837}" value="NULL"/>
     </categories>
     <symbols>
       <symbol alpha="1" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="0" type="line">
@@ -26,7 +26,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean proximity line -->
-        <layer class="SimpleLine" enabled="1" id="{9c10fe09-99ab-4b26-b277-4618487792cb}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{30132f68-b2e9-4225-bda2-b204d0bc7523}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -77,7 +77,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean proximity line -->
-        <layer class="SimpleLine" enabled="1" id="{bc9764bc-805a-4175-97bd-17a85b85a501}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{910d05b7-3b09-4b51-9779-81da8178d051}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -128,7 +128,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean proximity line -->
-        <layer class="SimpleLine" enabled="1" id="{b2545e57-232f-495d-a335-4629cdd78075}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{53364c07-2067-4325-812b-ce2d22d1a22b}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -179,7 +179,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean proximity line -->
-        <layer class="SimpleLine" enabled="1" id="{db519b43-a06e-4503-a7ea-62df1a898c91}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{c37638f3-198f-463b-b76d-0ab460073816}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -230,7 +230,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean proximity line -->
-        <layer class="SimpleLine" enabled="1" id="{3d835fc6-c1dd-4cab-9f4e-63c054cfbb62}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{8453cac1-409c-4c3b-87d8-11c942e6603d}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -281,7 +281,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean proximity line -->
-        <layer class="SimpleLine" enabled="1" id="{a979b3b7-0386-490f-be3f-a519bf789dc5}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{39dfbef7-79ca-404c-8cfc-320a15f45671}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
