@@ -882,6 +882,76 @@ def build_us_centerline(
 fairway.add_command(build_us_centerline, name="build-centerline")
 
 
+@fairway.command(name="build-rws-centerline")
+@click.option(
+    "--output-file",
+    "-o",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output metric fairway centerline file (.gpkg, .geoparquet, or .geojson).",
+)
+@click.option(
+    "--fairway-id",
+    type=int,
+    default=None,
+    help="RWS Fairway ID (e.g. 15384 for Amsterdam-Rijnkanaal, 27861 for Lek, 33192 for Waal).",
+)
+@click.option(
+    "--river-name",
+    type=str,
+    default=None,
+    help="Fairway name to query (e.g. 'Amsterdam-Rijnkanaal', 'Lek', 'Waal').",
+)
+@click.option(
+    "--bbox",
+    type=str,
+    default=None,
+    help="Optional bounding box 'minx,miny,maxx,maxy' in EPSG:4326.",
+)
+@click.option(
+    "--metric-crs",
+    default="EPSG:28992",
+    help="Target metric CRS (default: EPSG:28992 for Amersfoort / RD New).",
+)
+@click.option(
+    "--input-file",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Optional local GeoPackage/GeoJSON file of pre-downloaded RWS fairway sections.",
+)
+def build_rws_centerline(output_file, fairway_id, river_name, bbox, metric_crs, input_file):
+    """
+    Fetch Dutch fairway sections from Rijkswaterstaat FIS MapServer 58 and construct a metric FairwayAxis.
+    """
+    from .rws import build_rws_fairway
+    bbox_tuple = None
+    if bbox:
+        coords = [float(x.strip()) for x in bbox.split(",")]
+        if len(coords) != 4:
+            raise ValueError(f"bbox must have 4 comma-separated values, got {bbox}")
+        bbox_tuple = tuple(coords)
+
+    axis = build_rws_fairway(
+        data=input_file,
+        fairway_id=fairway_id,
+        river_name=river_name,
+        bbox=bbox_tuple,
+        metric_crs=metric_crs,
+    )
+    gdf = axis.to_geodataframe(crs=metric_crs)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Saving continuous metric fairway centerline ({axis.fairway_name}, length={gdf['length_km'].iloc[0]} km) to {output_file}...")
+    if output_file.suffix in [".parquet", ".geoparquet"]:
+        gdf.to_parquet(output_file)
+    elif output_file.suffix == ".gpkg":
+        gdf.to_file(output_file, driver="GPKG")
+    elif output_file.suffix in [".geojson", ".json"]:
+        gdf.to_file(output_file, driver="GeoJSON")
+    else:
+        gdf.to_file(output_file)
+    logger.info("RWS Fairway centerline processing complete.")
+
+
 # Register trajectory commands
 cli.add_command(trajectory)
 # Register convert commands

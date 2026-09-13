@@ -1096,7 +1096,14 @@ def run_segment_generation(
         gdf_segments = gdf_segments.to_crs(metric_crs)
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Saving segments GeoParquet to: {output_file}...")
-    gdf_segments.to_parquet(output_file)
+    logger.info(f"Saving segments to: {output_file}...")
+    if output_file.suffix in {".parquet", ".geoparquet"}:
+        gdf_segments.to_parquet(output_file)
+    elif output_file.suffix == ".gpkg":
+        gdf_segments.to_file(output_file, driver="GPKG")
+    elif output_file.suffix in {".geojson", ".json"}:
+        gdf_segments.to_file(output_file, driver="GeoJSON")
+    else:
+        gdf_segments.to_file(output_file)
     logger.info("Segment generation complete!")
 

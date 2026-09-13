@@ -1544,7 +1544,14 @@ def run_encounter_detection(
         logger.info(f"Found {len(stat_gdf):,} stationary segments across {vessel_cnt:,} vessels.")
         stationary_file.parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"Saving stationary vessels to {stationary_file}...")
-        stat_gdf.to_parquet(stationary_file)
+        if stationary_file.suffix in {".parquet", ".geoparquet"}:
+            stat_gdf.to_parquet(stationary_file)
+        elif stationary_file.suffix == ".gpkg":
+            stat_gdf.to_file(stationary_file, driver="GPKG")
+        elif stationary_file.suffix in {".geojson", ".json"}:
+            stat_gdf.to_file(stationary_file, driver="GeoJSON")
+        else:
+            stat_gdf.to_file(stationary_file)
 
     logger.info(f"Detecting encounters (max_distance={max_distance_m}m, exclude_stationary={exclude_stationary})...")
     events_gdf = detect_encounters(
@@ -1569,7 +1576,14 @@ def run_encounter_detection(
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Saving encounters to {output_file}...")
-    events_gdf.to_parquet(output_file)
+    if output_file.suffix in {".parquet", ".geoparquet"}:
+        events_gdf.to_parquet(output_file)
+    elif output_file.suffix == ".gpkg":
+        events_gdf.to_file(output_file, driver="GPKG")
+    elif output_file.suffix in {".geojson", ".json"}:
+        events_gdf.to_file(output_file, driver="GeoJSON")
+    else:
+        events_gdf.to_file(output_file)
 
     if timeseries_file is not None and not events_gdf.empty:
         logger.info(f"Generating encounter time series (step={timeseries_step_seconds}s)...")
@@ -1587,8 +1601,12 @@ def run_encounter_detection(
         logger.info(f"Saving encounter time series to {timeseries_file}...")
         if timeseries_file.suffix in {".parquet", ".geoparquet"}:
             ts_gdf.to_parquet(timeseries_file)
-        else:
+        elif timeseries_file.suffix == ".gpkg":
+            ts_gdf.to_file(timeseries_file, driver="GPKG")
+        elif timeseries_file.suffix in {".geojson", ".json"}:
             ts_gdf.to_file(timeseries_file, driver="GeoJSON")
+        else:
+            ts_gdf.to_file(timeseries_file)
 
 
 
