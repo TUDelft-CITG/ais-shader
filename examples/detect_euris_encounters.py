@@ -130,6 +130,9 @@ def make_segments_from_points(
 
     coords1 = np.column_stack([p1.geometry.x.values, p1.geometry.y.values])
     coords2 = np.column_stack([p2.geometry.x.values, p2.geometry.y.values])
+    identical = (coords1 == coords2).all(axis=1)
+    if np.any(identical):
+        coords2[identical] = coords1[identical] + [0.05, 0.05]
     geoms = [LineString([c1, c2]) for c1, c2 in zip(coords1, coords2)]
 
     t1 = pd.to_datetime(p1[time_col]).values

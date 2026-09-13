@@ -8,16 +8,16 @@
   </temporal>
   <renderer-v2 attr="VesselGroup" enableorderby="0" forceraster="0" referencescale="-1" symbollevels="0" type="categorizedSymbol">
     <categories>
-      <category label="Cargo" render="true" symbol="0" type="string" uuid="{0cb8e3eb-304d-4257-8be7-587b1de7e3ce}" value="Cargo"/>
-      <category label="Tanker" render="true" symbol="1" type="string" uuid="{773a26d7-e403-4c0a-9757-28ebb5c1324c}" value="Tanker"/>
-      <category label="Tug" render="true" symbol="2" type="string" uuid="{4f009fd0-f42e-48e2-8aa8-14f3cde91eab}" value="Tug"/>
-      <category label="Passenger" render="true" symbol="3" type="string" uuid="{27fb7c8e-0fa9-472a-8a11-0939a6413e2e}" value="Passenger"/>
-      <category label="Pleasure Craft/Sailing" render="true" symbol="4" type="string" uuid="{4c5c28d3-50ef-4686-b7cf-8692f4ccf625}" value="Pleasure Craft/Sailing"/>
-      <category label="Fishing" render="true" symbol="5" type="string" uuid="{68e99ca7-432f-46cc-998b-31cf02d50f1b}" value="Fishing"/>
-      <category label="Military" render="true" symbol="6" type="string" uuid="{e2955ecb-97ca-4587-bfc3-8411f64f7f76}" value="Military"/>
-      <category label="commercial" render="true" symbol="7" type="string" uuid="{339999d8-4148-42d0-ba6c-89aa9a06acb5}" value="commercial"/>
-      <category label="Other" render="true" symbol="8" type="string" uuid="{c3c7d3dc-e5a7-4006-950e-bec4f5252e26}" value="Other"/>
-      <category label="" render="true" symbol="9" type="NULL" uuid="{3c40e99e-c34d-4b29-bfab-9d3810458f0f}" value="NULL"/>
+      <category label="Cargo" render="true" symbol="0" type="string" uuid="{4060dc56-6967-489c-be3c-ecc87d580486}" value="Cargo"/>
+      <category label="Tanker" render="true" symbol="1" type="string" uuid="{ac81a9c0-8fe2-4667-8d2a-b3014aa40fb7}" value="Tanker"/>
+      <category label="Tug" render="true" symbol="2" type="string" uuid="{d5773886-c43a-484b-b2b9-e04148ce5845}" value="Tug"/>
+      <category label="Passenger" render="true" symbol="3" type="string" uuid="{7351d505-d51b-403d-b9ff-fc7340d237b3}" value="Passenger"/>
+      <category label="Pleasure Craft/Sailing" render="true" symbol="4" type="string" uuid="{ec234056-7ddf-4485-b2b5-b784c6de6031}" value="Pleasure Craft/Sailing"/>
+      <category label="Fishing" render="true" symbol="5" type="string" uuid="{769b3363-1115-4ad4-b1d8-99904ec1b66c}" value="Fishing"/>
+      <category label="Military" render="true" symbol="6" type="string" uuid="{1f90a3d5-bfd6-4fae-b2a8-7f4b99493c61}" value="Military"/>
+      <category label="commercial" render="true" symbol="7" type="string" uuid="{dc87770e-56d4-45cd-8703-388419f44b9c}" value="commercial"/>
+      <category label="Other" render="true" symbol="8" type="string" uuid="{ff3a52cc-4d4a-4ebf-bf8b-66f477347284}" value="Other"/>
+      <category label="" render="true" symbol="9" type="NULL" uuid="{21f51938-94be-4781-865a-b81c821dfba8}" value="NULL"/>
     </categories>
     <symbols>
       <symbol alpha="1" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="0" type="line">
@@ -29,7 +29,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean high saturation line -->
-        <layer class="SimpleLine" enabled="1" id="{ab0cdfa8-4ba9-47b9-8738-a53de7d1d7ee}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{485b81d9-676f-4ee1-b303-98d3077de990}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -74,7 +74,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean high saturation line -->
-        <layer class="SimpleLine" enabled="1" id="{4435f024-c9e1-4468-8413-2e34bc4c17c1}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{9a6949b0-e7cc-4a52-bd89-542fe91f1996}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -119,7 +119,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean high saturation line -->
-        <layer class="SimpleLine" enabled="1" id="{5a4d83d0-a16d-4d07-8519-35223309ad88}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{9c4d9276-263a-46d4-8e6a-6cd21ef62e6f}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -164,7 +164,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean high saturation line -->
-        <layer class="SimpleLine" enabled="1" id="{ad426243-ded0-4a59-9434-596beee9ca93}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{568c9e2c-aa8a-4ef7-afa8-1e09fb927488}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -209,7 +209,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean high saturation line -->
-        <layer class="SimpleLine" enabled="1" id="{de7e14a8-421f-4cd8-adab-892993d80af6}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{825bb21b-1cfb-4679-9a69-6274d115c009}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -254,7 +254,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean high saturation line -->
-        <layer class="SimpleLine" enabled="1" id="{127be06e-17e9-4c9a-bc65-413027c4690f}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{5f8bd13e-2ec4-42dc-881b-b60ea400617a}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -299,7 +299,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean high saturation line -->
-        <layer class="SimpleLine" enabled="1" id="{d08069de-4b4a-4c06-9deb-2042283c37c8}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{7e34726f-10f9-4b8a-a0d4-4895a4d157c2}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -344,7 +344,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean high saturation line -->
-        <layer class="SimpleLine" enabled="1" id="{c14cc4ae-5d41-42fe-9e56-492b46e26b10}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{6e5fc7bf-bacb-4219-9aaa-78bc6dc785a2}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -389,7 +389,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean high saturation line -->
-        <layer class="SimpleLine" enabled="1" id="{788a6c80-030e-4c79-8c09-811e59b8bcfb}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{55fab013-1d42-46e7-8078-346bceed373e}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -434,7 +434,7 @@
           </Option>
         </data_defined_properties>
         <!-- Single clean high saturation line -->
-        <layer class="SimpleLine" enabled="1" id="{26f63d16-ad90-47b0-a981-4f5abde28991}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{19784a0d-c54f-423c-a076-713008cda7de}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>

@@ -10,7 +10,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleLine" enabled="1" id="{f812dd13-3094-4f5d-9879-af26564cb2c8}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{caa905a0-56f2-44cf-80af-ee1f5cb1df1c}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
