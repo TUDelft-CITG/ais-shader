@@ -80,13 +80,9 @@ async def crawl_euris(
     request_payload = {
         "jsonrpc": "2.0",
         "method": "GetFeatures",
-        "params": {
-            "filters": {
-                "boundingBox": bbox,
-                "filterQuery": "()",
-            }
-        },
-        "id": 1,
+        "action": "subscribe",
+        "topic": "ais/target",
+        "bbox": bbox,
     }
 
     records = []
@@ -94,7 +90,13 @@ async def crawl_euris(
     start_time = time.monotonic()
     iteration = 0
 
-    with open(ndjson_path, "w", encoding="utf-8") as ndjson_file:
+    logger.info("=" * 75)
+    logger.info(f"Starting EURIS AIS Live Crawl for {duration_seconds:.0f}s (Interval: {interval_seconds:.1f}s)")
+    logger.info(f"BBox: {bbox}")
+    logger.info(f"Streaming NDJSON: {ndjson_path}")
+    logger.info("=" * 75)
+
+    with open(ndjson_path, "a", encoding="utf-8") as ndjson_file:
         while True:
             elapsed = time.monotonic() - start_time
             if elapsed >= duration_seconds:
@@ -117,46 +119,10 @@ async def crawl_euris(
 
                     batch_count = 0
                     for feat in features:
-                        geom = feat.get("geometry", {})
-                        coords = geom.get("coordinates", [None, None])
-                        lon, lat = coords[0], coords[1]
-                        if lon is None or lat is None:
+                        rec = parse_euris_feature(feat, now_iso)
+                        if rec is None:
                             continue
-
-                        props = feat.get("properties", {})
-                        track_id = str(props.get("TrackID") or "")
-                        mmsi_raw = str(props.get("MMSI") or "0")
-                        # Use MMSI if available and non-zero, otherwise TrackID
-                        vessel_id = mmsi_raw if (mmsi_raw and mmsi_raw != "0") else f"TRK_{track_id}"
-                        unique_tracks.add(vessel_id)
-
-                        dim_a = float(props.get("DimA") or 0.0)
-                        dim_b = float(props.get("DimB") or 0.0)
-                        dim_c = float(props.get("DimC") or 0.0)
-                        dim_d = float(props.get("DimD") or 0.0)
-                        length_m = dim_a + dim_b
-                        beam_m = dim_c + dim_d
-
-                        status_code = props.get("ST")
-                        status_label = STATUS_LABELS.get(status_code, "Other") if status_code is not None else "Other"
-
-                        rec = {
-                            "mmsi": vessel_id,
-                            "track_id": track_id,
-                            "name": props.get("Name"),
-                            "base_date_time": now_iso,
-                            "timestamp": now_iso,
-                            "longitude": lon,
-                            "latitude": lat,
-                            "sog": float(props.get("SOG") or 0.0),
-                            "cog": float(props.get("COG") or 0.0),
-                            "heading": float(props.get("TH") or 0.0),
-                            "length": length_m if length_m > 0 else None,
-                            "beam": beam_m if beam_m > 0 else None,
-                            "status": status_label,
-                            "raw_status": status_code,
-                            "shiptypeAIS": props.get("VT"),
-                        }
+                        unique_tracks.add(rec["mmsi"])
                         records.append(rec)
                         ndjson_file.write(json.dumps(rec) + "\n")
                         batch_count += 1
@@ -179,34 +145,35 @@ async def crawl_euris(
             if sleep_time > 0:
                 await asyncio.sleep(sleep_time)
 
-    # Convert collected records to GeoDataFrame and save GeoParquet & GeoJSON
-    if records:
-        logger.info("Converting collected records to GeoDataFrame...")
-        df = pd.DataFrame(records)
-        df["base_date_time"] = pd.to_datetime(df["base_date_time"])
-        geoms = shapely.points(df["longitude"].values, df["latitude"].values)
-        gdf = gpd.GeoDataFrame(df, geometry=geoms, crs="EPSG:4326")
-
-        logger.info(f"Saving GeoParquet dataset to {parquet_path}...")
-        gdf.to_parquet(parquet_path)
-
-        logger.info(f"Saving GeoPackage dataset to {gpkg_path}...")
-        gdf.to_file(gpkg_path, layer="raw_points", driver="GPKG")
-
-        logger.info(f"Saving GeoJSON snapshot to {geojson_path}...")
-        gdf.to_file(geojson_path, driver="GeoJSON")
-
-        logger.info("=" * 75)
-        logger.info("EURIS AIS Crawl Completed Successfully!")
-        logger.info(f"Total fixes recorded: {len(gdf):,}")
-        logger.info(f"Total unique vessels: {gdf['mmsi'].nunique():,}")
-        logger.info(f"Output GeoPackage: {gpkg_path} ({gpkg_path.stat().st_size / 1024:.1f} KB)")
-        logger.info(f"Output GeoParquet: {parquet_path} ({parquet_path.stat().st_size / 1024:.1f} KB)")
-        logger.info(f"Output NDJSON: {ndjson_path} ({ndjson_path.stat().st_size / 1024:.1f} KB)")
-        logger.info(f"Output GeoJSON: {geojson_path} ({geojson_path.stat().st_size / 1024:.1f} KB)")
-        logger.info("=" * 75)
-    else:
+    if not records:
         logger.warning("No records were collected during the crawl.")
+        return
+
+    # Convert collected records to GeoDataFrame and save GeoParquet & GeoJSON
+    logger.info("Converting collected records to GeoDataFrame...")
+    df = pd.DataFrame(records)
+    df["base_date_time"] = pd.to_datetime(df["base_date_time"])
+    geoms = shapely.points(df["longitude"].values, df["latitude"].values)
+    gdf = gpd.GeoDataFrame(df, geometry=geoms, crs="EPSG:4326")
+
+    logger.info(f"Saving GeoParquet dataset to {parquet_path}...")
+    gdf.to_parquet(parquet_path)
+
+    logger.info(f"Saving GeoPackage dataset to {gpkg_path}...")
+    gdf.to_file(gpkg_path, layer="raw_points", driver="GPKG")
+
+    logger.info(f"Saving GeoJSON snapshot to {geojson_path}...")
+    gdf.to_file(geojson_path, driver="GeoJSON")
+
+    logger.info("=" * 75)
+    logger.info("EURIS AIS Crawl Completed Successfully!")
+    logger.info(f"Total fixes recorded: {len(gdf):,}")
+    logger.info(f"Total unique vessels: {gdf['mmsi'].nunique():,}")
+    logger.info(f"Output GeoPackage: {gpkg_path} ({gpkg_path.stat().st_size / 1024:.1f} KB)")
+    logger.info(f"Output GeoParquet: {parquet_path} ({parquet_path.stat().st_size / 1024:.1f} KB)")
+    logger.info(f"Output NDJSON: {ndjson_path} ({ndjson_path.stat().st_size / 1024:.1f} KB)")
+    logger.info(f"Output GeoJSON: {geojson_path} ({geojson_path.stat().st_size / 1024:.1f} KB)")
+    logger.info("=" * 75)
 
 
 def main():

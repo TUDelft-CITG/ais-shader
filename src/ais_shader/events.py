@@ -1506,8 +1506,11 @@ def run_encounter_detection(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     max_segment_duration_s: float = 1800.0,
+    event_file: Optional[Path] = None,
 ) -> None:
     """CLI/script entry point: detect_encounters, reading and writing GeoParquet files."""
+    if event_file is not None:
+        timeseries_file = event_file
     client = None
     if scheduler:
         logger.info(f"Connecting to Dask scheduler at {scheduler}...")

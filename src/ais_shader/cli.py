@@ -705,10 +705,13 @@ def polygon_entry_exit(input_file, polygons_file, polygon_id_col, merge_gap_minu
     help="River name filter when loading from multi-river mile markers dataset (default: 'MISSISSIPPI-LO').",
 )
 @click.option(
+    "--event-file",
+    "--events-file",
     "--timeseries-file",
+    "event_file",
     type=click.Path(path_type=Path),
     default=None,
-    help="Optional path to output GeoParquet/GeoJSON file for dynamic encounter connecting lines time series.",
+    help="Optional path to output dynamic encounter connecting line events time series (.geoparquet, .gpkg, or .geojson).",
 )
 @click.option(
     "--timeseries-step",
@@ -771,7 +774,7 @@ def polygon_entry_exit(input_file, polygons_file, polygon_id_col, merge_gap_minu
     default=1800.0,
     help="Maximum segment duration in seconds to consider for encounters (default: 1800.0s = 30 min). Longer gaps are ignored.",
 )
-def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fairway_markers, river_name, timeseries_file, timeseries_step, exclude_stationary, stationary_file, min_speed, metric_crs, output_file, scheduler, start_time, end_time, max_segment_duration_s):
+def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fairway_markers, river_name, event_file, timeseries_step, exclude_stationary, stationary_file, min_speed, metric_crs, output_file, scheduler, start_time, end_time, max_segment_duration_s):
     """
     Detect vessel encounters (crossings, overtakings, head-on meetings) from a segment table.
     """
@@ -787,7 +790,7 @@ def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fa
         min_moving_speed=min_speed,
         fairway_axis=fairway_markers,
         river_name=river_name,
-        timeseries_file=timeseries_file,
+        timeseries_file=event_file,
         timeseries_step_seconds=timeseries_step,
         stationary_file=stationary_file,
         metric_crs=metric_crs,

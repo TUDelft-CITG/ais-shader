@@ -194,55 +194,17 @@ def _warn_if_sog_units_implausible(sog_after_scaling, raw_units: bool, invalid_m
             )
 
 
-def to_utc_datetime(
-    data: Any,
-    format: Optional[str] = None,
-    errors: str = "coerce",
-) -> Any:
+def to_utc_datetime(data: Any, format: Optional[str] = None) -> Any:
     """
-    Single canonical point of entry in preprocessing to handle and enforce UTC datetime.
-
-    Converts any input (string, datetime, pd.Timestamp, pd.Series, pd.DatetimeIndex)
-    to UTC and then strips the timezone (tz-naive datetime64[ns] referencing UTC).
-    All downstream computations operate strictly in UTC without tz-aware/naive mismatch issues.
+    Convert timestamps or time series to UTC and strip timezone (tz-naive UTC datetime64).
     """
     if data is None:
         return None
-
-    if isinstance(data, pd.Timestamp):
-        if data.tz is not None:
-            data = data.tz_convert("UTC")
-        return data.tz_localize(None)
-
-    if isinstance(data, datetime.datetime):
-        if data.tzinfo is not None:
-            data = pd.Timestamp(data).tz_convert("UTC")
-        return pd.Timestamp(data).tz_localize(None)
-
-    if isinstance(data, np.datetime64):
-        if np.isnat(data):
-            return pd.NaT
-        return pd.Timestamp(data).tz_localize(None)
-
-    if isinstance(data, (str, bytes)):
-        ts = pd.to_datetime(data, format=format, errors=errors, utc=True)
-        if hasattr(ts, "tz_localize"):
-            return ts.tz_localize(None)
-        return ts
-
-    if isinstance(data, pd.Series):
-        s = pd.to_datetime(data, format=format, errors=errors, utc=True)
-        return s.dt.tz_localize(None)
-
-    if isinstance(data, pd.DatetimeIndex):
-        idx = pd.to_datetime(data, format=format, errors=errors, utc=True)
-        return idx.tz_localize(None)
-
-    res = pd.to_datetime(data, format=format, errors=errors, utc=True)
-    if hasattr(res, "tz_localize"):
-        return res.tz_localize(None)
+    res = pd.to_datetime(data, format=format, utc=True)
     if hasattr(res, "dt"):
         return res.dt.tz_localize(None)
+    if hasattr(res, "tz_localize"):
+        return res.tz_localize(None)
     return res
 
 
