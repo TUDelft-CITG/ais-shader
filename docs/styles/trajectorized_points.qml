@@ -8,7 +8,7 @@
   </temporal>
   <renderer-v2 enableorderby="0" forceraster="0" referencescale="-1" symbollevels="0" type="singleSymbol">
     <symbols>
-      <symbol alpha="1" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="0" type="marker">
+      <symbol alpha="0.438" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="0" type="marker">
         <data_defined_properties>
           <Option type="Map">
             <Option name="name" type="QString" value=""/>
@@ -16,11 +16,11 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{568632dd-28a1-4470-9c87-f7f154ff0abc}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{df9e9fa0-d345-4bf6-a1e5-919149726e51}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="round"/>
-            <Option name="color" type="QString" value="37,99,235,240,hsv:0.61388889,0.84313725,0.92156863,0.94117647"/>
+            <Option name="color" type="QString" value="37,100,235,240,hsv:0.61388889,0.84313725,0.92156863,0.94117647"/>
             <Option name="horizontal_anchor_point" type="QString" value="1"/>
             <Option name="joinstyle" type="QString" value="round"/>
             <Option name="name" type="QString" value="arrow"/>
@@ -42,19 +42,19 @@
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
               <Option name="properties" type="Map">
-                <Option name="name" type="Map">
-                  <Option name="active" type="bool" value="true"/>
-                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360), 'circle', 'arrow')"/>
-                  <Option name="type" type="int" value="3"/>
-                </Option>
                 <Option name="angle" type="Map">
                   <Option name="active" type="bool" value="true"/>
-                  <Option name="expression" type="QString" value="coalesce(if(&quot;heading&quot; &lt; 360, &quot;heading&quot;, null), if(&quot;cog&quot; &lt; 360, &quot;cog&quot;, null), 0)"/>
+                  <Option name="expression" type="QString" value="coalesce(if(&quot;heading&quot; &lt; 360 AND &quot;heading&quot; > 0, &quot;heading&quot;, null), if(&quot;cog&quot; &lt; 360, &quot;cog&quot;, null), 0)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+                <Option name="name" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360 or &quot;heading&quot; = 0) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360 or &quot;cog&quot; = 0), 'circle', 'arrow')"/>
                   <Option name="type" type="int" value="3"/>
                 </Option>
                 <Option name="size" type="Map">
                   <Option name="active" type="bool" value="true"/>
-                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360), coalesce(&quot;beam&quot;, 12), coalesce(&quot;length&quot;, 25))"/>
+                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360 or &quot;heading&quot; = 0) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360 or &quot;cog&quot; = 0), coalesce(&quot;beam&quot;, 12), coalesce(&quot;length&quot;, 25))"/>
                   <Option name="type" type="int" value="3"/>
                 </Option>
               </Option>

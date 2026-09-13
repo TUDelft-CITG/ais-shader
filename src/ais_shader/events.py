@@ -729,6 +729,13 @@ def _evaluate_candidates_in_window(
         if prox_start > t_end or prox_end < t_start:
             continue
 
+        sog1_val = sogs[idx1] if sogs is not None and not np.isnan(sogs[idx1]) else None
+        sog2_val = sogs[idx2] if sogs is not None and not np.isnan(sogs[idx2]) else None
+        if speed1 < min_moving_speed and sog1_val is not None and sog1_val >= 1.0:
+            speed1 = sog1_val * 0.514444
+        if speed2 < min_moving_speed and sog2_val is not None and sog2_val >= 1.0:
+            speed2 = sog2_val * 0.514444
+
         is_stat_1 = bool(speed1 < min_moving_speed)
         is_stat_2 = bool(speed2 < min_moving_speed)
 

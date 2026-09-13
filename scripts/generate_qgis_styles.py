@@ -25,7 +25,7 @@ TRAJECTORIZED_POINTS_QML = f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 
   </temporal>
   <renderer-v2 enableorderby="0" forceraster="0" referencescale="-1" symbollevels="0" type="singleSymbol">
     <symbols>
-      <symbol alpha="1" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="0" type="marker">
+      <symbol alpha="0.438" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="0" type="marker">
         <data_defined_properties>
           <Option type="Map">
             <Option name="name" type="QString" value=""/>
@@ -37,7 +37,7 @@ TRAJECTORIZED_POINTS_QML = f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="round"/>
-            <Option name="color" type="QString" value="37,99,235,240,hsv:0.61388889,0.84313725,0.92156863,0.94117647"/>
+            <Option name="color" type="QString" value="37,100,235,240,hsv:0.61388889,0.84313725,0.92156863,0.94117647"/>
             <Option name="horizontal_anchor_point" type="QString" value="1"/>
             <Option name="joinstyle" type="QString" value="round"/>
             <Option name="name" type="QString" value="arrow"/>
@@ -59,19 +59,19 @@ TRAJECTORIZED_POINTS_QML = f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
               <Option name="properties" type="Map">
-                <Option name="name" type="Map">
-                  <Option name="active" type="bool" value="true"/>
-                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360), 'circle', 'arrow')"/>
-                  <Option name="type" type="int" value="3"/>
-                </Option>
                 <Option name="angle" type="Map">
                   <Option name="active" type="bool" value="true"/>
-                  <Option name="expression" type="QString" value="coalesce(if(&quot;heading&quot; &lt; 360, &quot;heading&quot;, null), if(&quot;cog&quot; &lt; 360, &quot;cog&quot;, null), 0)"/>
+                  <Option name="expression" type="QString" value="coalesce(if(&quot;heading&quot; &lt; 360 AND &quot;heading&quot; > 0, &quot;heading&quot;, null), if(&quot;cog&quot; &lt; 360, &quot;cog&quot;, null), 0)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+                <Option name="name" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360 or &quot;heading&quot; = 0) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360 or &quot;cog&quot; = 0), 'circle', 'arrow')"/>
                   <Option name="type" type="int" value="3"/>
                 </Option>
                 <Option name="size" type="Map">
                   <Option name="active" type="bool" value="true"/>
-                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360), coalesce(&quot;beam&quot;, 12), coalesce(&quot;length&quot;, 25))"/>
+                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360 or &quot;heading&quot; = 0) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360 or &quot;cog&quot; = 0), coalesce(&quot;beam&quot;, 12), coalesce(&quot;length&quot;, 25))"/>
                   <Option name="type" type="int" value="3"/>
                 </Option>
               </Option>
@@ -323,6 +323,7 @@ VESSEL_GROUPS = [
     ("Pleasure Craft/Sailing", "142,36,170,255,hsv:0.789,0.788,0.667,1"), # Violet
     ("Fishing", "67,160,71,255,hsv:0.340,0.581,0.627,1"),          # Forest Green
     ("Military", "84,110,122,255,hsv:0.553,0.311,0.478,1"),        # Slate Navy
+    ("commercial", "30,136,229,255,hsv:0.578,0.869,0.898,1"),      # Commercial (Azure)
     ("Other", "120,144,156,255,hsv:0.556,0.231,0.612,1"),         # Muted Blue-Grey
     ("NULL", "158,158,158,255,hsv:0.0,0.0,0.62,1"),
 ]
@@ -860,6 +861,7 @@ def main():
             "fairway_centerline": fairway_qml,
             "fairway_sections": sections_qml,
             "trajectorized_points": points_qml,
+            "trajectories": traj_qml,
             "segments": segs_qml,
             "stationary_vessels": stat_vessels_qml,
             "encounters": enc_qml,

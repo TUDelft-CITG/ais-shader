@@ -46,6 +46,7 @@ from shapely.geometry import LineString, Point
 
 from ais_shader.events import detect_encounters, generate_encounter_timeseries, extract_stationary_vessels
 from ais_shader.fairway import FairwayAxis
+from ais_shader.preprocessing import get_vessel_group
 from ais_shader.rws import (
     build_rws_fairway,
     fetch_rws_fairway_sections,
@@ -65,6 +66,18 @@ DEFAULT_OUTPUT_GPKG = Path("/scratch-shared/fbaart/data/euris_crawl/euris_encoun
 DEFAULT_FAIRWAY_ID = 15384
 DEFAULT_FAIRWAY_NAME = "Amsterdam-Rijnkanaal"
 DEFAULT_METRIC_CRS = "EPSG:28992"  # Amersfoort / RD New
+
+
+def classify_vessel_group(shiptype: any, length: Optional[float] = None) -> str:
+    """
+    Classify vessel into Marine Cadastre / ais-shader standard vessel groups.
+    If AIS ship type is 0 or unspecified, infer commercial cargo if length >= 30m.
+    """
+    group = get_vessel_group(shiptype, {})
+    if group == "Other":
+        if length is not None and not pd.isna(length) and length >= 30.0:
+            return "Cargo"
+    return group
 
 
 def make_segments_from_points(
@@ -89,7 +102,26 @@ def make_segments_from_points(
         gdf_metric["trip_id"] = gdf_metric["mmsi"].astype(str) + "_voyage1"
 
     logger.info("Constructing 2-point line segments from consecutive fixes...")
-    sorted_df = gdf_metric.sort_values(by=["trip_id", time_col])
+    sorted_df = gdf_metric.sort_values(by=["trip_id", time_col]).reset_index(drop=True)
+
+    # Deduplicate repeated GPS pings for moving vessels
+    # Transponders transmitting every 20-30s produce consecutive identical coords
+    # in high-frequency (10s) crawls. Dropping duplicate consecutive pings when sog >= 0.5
+    # ensures segments reflect true motion vectors and prevents false stationary classifications.
+    coords_all = np.column_stack([sorted_df.geometry.x.values, sorted_df.geometry.y.values])
+    trips_all = sorted_df["trip_id"].values
+    sogs_all = sorted_df["sog"].values if "sog" in sorted_df.columns else np.zeros(len(sorted_df))
+
+    same_trip = (trips_all[1:] == trips_all[:-1])
+    same_coord = (coords_all[1:, 0] == coords_all[:-1, 0]) & (coords_all[1:, 1] == coords_all[:-1, 1])
+    is_moving = (sogs_all[1:] >= 0.5)
+    drop_mask = np.zeros(len(sorted_df), dtype=bool)
+    drop_mask[1:] = same_trip & same_coord & is_moving
+    n_dedup = int(drop_mask.sum())
+    if n_dedup > 0:
+        logger.info(f"Deduplicated {n_dedup:,} repeated GPS pings on moving vessels.")
+        sorted_df = sorted_df[~drop_mask].copy().reset_index(drop=True)
+
     shifted = sorted_df.groupby("trip_id").shift(-1)
     mask = shifted[time_col].notna()
 
@@ -114,26 +146,92 @@ def make_segments_from_points(
 
     lengths = p1["length"].values if "length" in p1.columns else np.full(len(p1), np.nan)
     widths = p1["beam"].values if "beam" in p1.columns else np.full(len(p1), np.nan)
-    shiptypes = p1["shiptypeAIS"].values if "shiptypeAIS" in p1.columns else np.full(len(p1), None)
+    shiptypes = p1["shiptypeAIS"].values if "shiptypeAIS" in p1.columns else np.full(len(p1), 0)
+
+    vessel_groups = [
+        classify_vessel_group(st, l) for st, l in zip(shiptypes[valid], lengths[valid])
+    ]
+    durations_s = durations[valid]
+    durations_m = np.round(durations_s / 60.0, 2)
 
     df_segs = pd.DataFrame({
         "MMSI": p1["mmsi"].values[valid],
         "trip_id": p1["trip_id"].values[valid],
         "VesselType": shiptypes[valid],
-        "VesselGroup": "commercial",
+        "VesselGroup": vessel_groups,
         "Length": lengths[valid],
         "Width": widths[valid],
-        "segment_start_time": t1[valid],
-        "segment_end_time": t2[valid],
+        "segment_start_time": pd.to_datetime(t1[valid]),
+        "segment_end_time": pd.to_datetime(t2[valid]),
+        "DurationMinutes": durations_m,
         "speed_mps": speeds_mps[valid],
         "sog": p1["sog"].values[valid] if "sog" in p1.columns else np.nan,
-        "segment_duration_s": durations[valid],
+        "segment_duration_s": durations_s,
     })
 
     geoms_valid = [g for g, v in zip(geoms, valid) if v]
     gdf_segs = gpd.GeoDataFrame(df_segs, geometry=geoms_valid, crs=metric_crs)
     logger.info(f"Generated {len(gdf_segs):,} valid metric line segments across {gdf_segs['MMSI'].nunique()} vessels.")
     return gdf_metric, gdf_segs
+
+
+def make_trajectories_from_points(
+    gdf_pts: gpd.GeoDataFrame,
+    metric_crs: str = DEFAULT_METRIC_CRS,
+) -> gpd.GeoDataFrame:
+    """
+    Construct continuous voyage LineStrings from sorted point fixes grouped by trip_id.
+
+    Returns:
+        gdf_trajectories: GeoDataFrame with LineString geometry and TrackStartTime/EndTime.
+    """
+    time_col = "base_date_time" if "base_date_time" in gdf_pts.columns else "timestamp"
+    sorted_df = gdf_pts.sort_values(by=["trip_id", time_col])
+
+    geoms = []
+    records = []
+
+    for trip_id, grp in sorted_df.groupby("trip_id"):
+        coords = np.column_stack([grp.geometry.x.values, grp.geometry.y.values])
+        mask = np.ones(len(coords), dtype=bool)
+        mask[1:] = np.any(coords[1:] != coords[:-1], axis=1)
+        clean_coords = coords[mask]
+
+        if len(clean_coords) < 2:
+            continue
+
+        geom = LineString(clean_coords)
+        geoms.append(geom)
+
+        t_start = pd.to_datetime(grp[time_col].min())
+        t_end = pd.to_datetime(grp[time_col].max())
+        duration_min = round((t_end - t_start).total_seconds() / 60.0, 2)
+        shiptype = grp["shiptypeAIS"].iloc[0] if "shiptypeAIS" in grp.columns else 0
+        length = grp["length"].iloc[0] if "length" in grp.columns else np.nan
+        width = grp["beam"].iloc[0] if "beam" in grp.columns else np.nan
+        draft = grp["draught"].iloc[0] if "draught" in grp.columns else np.nan
+        vessel_name = grp["name"].iloc[0] if "name" in grp.columns else ""
+        mmsi = grp["mmsi"].iloc[0] if "mmsi" in grp.columns else (grp["MMSI"].iloc[0] if "MMSI" in grp.columns else str(trip_id))
+
+        vgroup = classify_vessel_group(shiptype, length)
+
+        records.append({
+            "MMSI": mmsi,
+            "trip_id": trip_id,
+            "VesselName": vessel_name,
+            "TrackStartTime": t_start,
+            "TrackEndTime": t_end,
+            "DurationMinutes": duration_min,
+            "VesselType": shiptype,
+            "VesselGroup": vgroup,
+            "Length": length,
+            "Width": width,
+            "Draft": draft,
+        })
+
+    gdf_traj = gpd.GeoDataFrame(records, geometry=geoms, crs=metric_crs)
+    logger.info(f"Generated {len(gdf_traj):,} trajectory LineStrings across {gdf_traj['MMSI'].nunique()} vessels.")
+    return gdf_traj
 
 
 def save_layer_to_gpkg(
@@ -213,6 +311,13 @@ def run_euris_encounter_detection(
 
     # Also filter points within corridor for display
     pts_in_corridor = gdf_pts_metric[gdf_pts_metric.geometry.intersects(corridor_poly)].copy().reset_index(drop=True)
+    pts_st = pts_in_corridor["shiptypeAIS"] if "shiptypeAIS" in pts_in_corridor.columns else [0] * len(pts_in_corridor)
+    pts_len = pts_in_corridor["length"] if "length" in pts_in_corridor.columns else [np.nan] * len(pts_in_corridor)
+    pts_in_corridor["VesselGroup"] = [classify_vessel_group(st, l) for st, l in zip(pts_st, pts_len)]
+
+    # 3b. Build Continuous Voyage Trajectories within Fairway Corridor
+    logger.info("Building continuous voyage trajectories from corridor fixes...")
+    gdf_trajectories = make_trajectories_from_points(pts_in_corridor, metric_crs=metric_crs)
 
     # 4. Extract Stationary Vessels
     logger.info("Extracting stationary vessels and moored obstacles...")
@@ -266,6 +371,8 @@ def run_euris_encounter_detection(
     if not fairway_sections_gdf.empty:
         save_layer_to_gpkg(fairway_sections_gdf, output_gpkg, "fairway_sections")
     save_layer_to_gpkg(pts_in_corridor, output_gpkg, "trajectorized_points")
+    if not gdf_trajectories.empty:
+        save_layer_to_gpkg(gdf_trajectories, output_gpkg, "trajectories")
     save_layer_to_gpkg(gdf_segs_corridor, output_gpkg, "segments")
     if not stat_gdf.empty:
         save_layer_to_gpkg(stat_gdf, output_gpkg, "stationary_vessels")
@@ -273,6 +380,34 @@ def run_euris_encounter_detection(
         save_layer_to_gpkg(events_gdf, output_gpkg, "encounters")
     if not ts_gdf.empty:
         save_layer_to_gpkg(ts_gdf, output_gpkg, "timeseries")
+
+    # 9. Embed QGIS Layer Styles and Temporal Configuration directly into GeoPackage
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from generate_qgis_styles import (
+            embed_gpkg_layer_styles,
+            make_vesselgroup_line_qml,
+            make_segments_qml,
+            make_encounters_qml,
+            make_timeseries_qml,
+            TRAJECTORIZED_POINTS_QML,
+            FAIRWAY_CENTERLINE_QML,
+            FAIRWAY_SECTIONS_QML,
+        )
+        qgis_styles = {
+            "fairway_centerline": FAIRWAY_CENTERLINE_QML,
+            "fairway_sections": FAIRWAY_SECTIONS_QML,
+            "trajectorized_points": TRAJECTORIZED_POINTS_QML,
+            "trajectories": make_vesselgroup_line_qml("trajectories", "TrackStartTime", "TrackEndTime", line_width=0.45),
+            "segments": make_segments_qml(),
+            "stationary_vessels": make_vesselgroup_line_qml("stationary_vessels", "segment_start_time", "segment_end_time", line_width=0.50),
+            "encounters": make_encounters_qml(),
+            "timeseries": make_timeseries_qml(),
+        }
+        embed_gpkg_layer_styles(str(output_gpkg), qgis_styles)
+        logger.info(f"Successfully embedded QGIS styles into {output_gpkg}")
+    except Exception as exc:
+        logger.warning(f"Could not automatically embed QGIS styles into {output_gpkg}: {exc}")
 
     # 8. Print Results & Summary
     logger.info("=" * 80)
