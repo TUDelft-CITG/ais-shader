@@ -1054,6 +1054,7 @@ def _generate_encounter_timeseries_chunk(
     step_seconds: float = 30.0,
     fairway_axis: Optional[FairwayAxis] = None,
     metric_crs: str = "EPSG:3857",
+    segments_crs: str = "EPSG:4326",
 ) -> gpd.GeoDataFrame:
     """Generate timeseries connecting lines for a chunk of encounters."""
     empty_cols = TIMESERIES_COLS.copy()
@@ -1066,7 +1067,11 @@ def _generate_encounter_timeseries_chunk(
     records = []
     line_geoms = []
 
-    transformer = pyproj.Transformer.from_crs("EPSG:4326", metric_crs, always_xy=True)
+    is_metric_input = pyproj.CRS.from_user_input(segments_crs) == pyproj.CRS.from_user_input(metric_crs)
+    is_4326_input = pyproj.CRS.from_user_input(segments_crs) == pyproj.CRS.from_user_input("EPSG:4326")
+
+    to_metric = None if is_metric_input else pyproj.Transformer.from_crs(segments_crs, metric_crs, always_xy=True)
+    to_4326 = None if is_4326_input else pyproj.Transformer.from_crs(segments_crs, "EPSG:4326", always_xy=True)
 
     for idx, enc_row in encounters_chunk.iterrows():
         enc_id = enc_row.get('encounter_id', idx)
@@ -1104,8 +1109,15 @@ def _generate_encounter_timeseries_chunk(
         sub_p1 = pts1[valid]
         sub_p2 = pts2[valid]
 
-        coords = np.column_stack([sub_p1, sub_p2]).reshape(-1, 2, 2)
-        lines = shapely.linestrings(coords)
+        if is_4326_input:
+            coords_4326 = np.column_stack([sub_p1, sub_p2]).reshape(-1, 2, 2)
+        else:
+            lon1, lat1 = to_4326.transform(sub_p1[:, 0], sub_p1[:, 1])
+            lon2, lat2 = to_4326.transform(sub_p2[:, 0], sub_p2[:, 1])
+            p1_4326 = np.column_stack([lon1, lat1])
+            p2_4326 = np.column_stack([lon2, lat2])
+            coords_4326 = np.column_stack([p1_4326, p2_4326]).reshape(-1, 2, 2)
+        lines = shapely.linestrings(coords_4326)
 
         cpa_val = t_cpa.to_datetime64().astype(np.int64)
         cpa_diffs = np.abs(sub_ts - cpa_val)
@@ -1114,10 +1126,16 @@ def _generate_encounter_timeseries_chunk(
         if cpa_diffs[min_idx] <= max(step_seconds, 2.0) * 1e9:
             is_cpa_arr[min_idx] = True
 
-        x1_m, y1_m = transformer.transform(sub_p1[:, 0], sub_p1[:, 1])
-        x2_m, y2_m = transformer.transform(sub_p2[:, 0], sub_p2[:, 1])
-        p1_coords = np.column_stack([x1_m, y1_m])
-        p2_coords = np.column_stack([x2_m, y2_m])
+        if is_metric_input:
+            x1_m, y1_m = sub_p1[:, 0], sub_p1[:, 1]
+            x2_m, y2_m = sub_p2[:, 0], sub_p2[:, 1]
+            p1_coords = sub_p1
+            p2_coords = sub_p2
+        else:
+            x1_m, y1_m = to_metric.transform(sub_p1[:, 0], sub_p1[:, 1])
+            x2_m, y2_m = to_metric.transform(sub_p2[:, 0], sub_p2[:, 1])
+            p1_coords = np.column_stack([x1_m, y1_m])
+            p2_coords = np.column_stack([x2_m, y2_m])
         dist_m = np.hypot(x1_m - x2_m, y1_m - y2_m)
 
         if fairway_axis is not None:
@@ -1178,6 +1196,8 @@ def generate_encounter_timeseries(
     if encounters_gdf.empty or segments_gdf.empty:
         return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
 
+    segments_crs = str(segments_gdf.crs) if segments_gdf.crs else "EPSG:4326"
+
     if metric_crs is None:
         if fairway_axis is not None:
             metric_crs = fairway_axis.metric_crs
@@ -1200,7 +1220,7 @@ def generate_encounter_timeseries(
         scattered_lookup = client.scatter(lookup, broadcast=True)
         tasks = [
             dask.delayed(_generate_encounter_timeseries_chunk)(
-                chunk, scattered_lookup, step_seconds, fairway_axis, metric_crs
+                chunk, scattered_lookup, step_seconds, fairway_axis, metric_crs, segments_crs
             )
             for chunk in enc_chunks
         ]
@@ -1211,7 +1231,7 @@ def generate_encounter_timeseries(
         return pd.concat(valid_results, ignore_index=True)
 
     return _generate_encounter_timeseries_chunk(
-        encounters_gdf, lookup, step_seconds=step_seconds, fairway_axis=fairway_axis, metric_crs=metric_crs
+        encounters_gdf, lookup, step_seconds=step_seconds, fairway_axis=fairway_axis, metric_crs=metric_crs, segments_crs=segments_crs
     )
 
 
