@@ -446,6 +446,38 @@ def test_encounter_roles_and_timeseries_attributes():
     assert all(ts['is_stationary_2'] == False)
 
 
+def test_detect_encounters_overtaking_outside_fairway():
+    from shapely.geometry import LineString
+    from ais_shader.fairway import FairwayAxis
+
+    # Fairway centerline far away (Mississippi River ~150km east)
+    centerline = LineString([(-89.5, 29.0), (-89.5, 30.0)])
+    axis = FairwayAxis(centerline, metric_crs="EPSG:32616")
+
+    # Ship 1: slow tug (367189510), starts ahead
+    # Ship 2: fast tug (367542760), starts behind and overtakes
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            _make_segment('367189510', 'slow_tug', (-91.065, 29.625), (-91.039, 29.625), '2026-03-31 00:00:00', 1800, sog=2.9),
+            _make_segment('367542760', 'fast_tug', (-91.070, 29.625), (-91.005, 29.625), '2026-03-31 00:00:00', 1800, sog=6.9),
+        ],
+        crs="EPSG:4326"
+    )
+
+    encounters = detect_encounters(segments_gdf, max_distance_m=500.0, fairway_axis=axis)
+    assert len(encounters) == 1
+    enc = encounters.iloc[0]
+
+    assert enc['encounter_type'] == 'overtaking'
+    assert str(enc['overtaking_mmsi']) == '367542760'
+    assert str(enc['overtaken_mmsi']) == '367189510'
+    assert str(enc['source_mmsi']) == '367542760'
+    assert str(enc['target_mmsi']) == '367189510'
+    assert enc['role_1'] == 'overtaken'
+    assert enc['role_2'] == 'overtaking'
+
+
+
 
 
 

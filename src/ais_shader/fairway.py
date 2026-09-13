@@ -361,10 +361,18 @@ class FairwayAxis:
         is_crossing = (~is_stationary) & (np.abs(v_n) > 1.5 * np.maximum(np.abs(v_s), 0.1)) & (np.abs(v_n) > 0.5)
         is_upbound = (~is_stationary) & (~is_crossing) & (v_s > 0)
 
+        # Segments far from the fairway centerline are outside the fairway corridor
+        max_dist = np.maximum(np.abs(n1), np.abs(n2))
+        is_outside = max_dist > 3000.0
+
         directions = np.where(
-            is_stationary,
-            "stationary",
-            np.where(is_crossing, "crossing", np.where(is_upbound, "upbound", "downbound")),
+            is_outside,
+            "outside_fairway",
+            np.where(
+                is_stationary,
+                "stationary",
+                np.where(is_crossing, "crossing", np.where(is_upbound, "upbound", "downbound")),
+            ),
         )
 
         df = gdf_segments.copy()
@@ -386,6 +394,8 @@ class FairwayAxis:
         ds_start: float,
         ds_end: float,
         dv_along: float,
+        heading1: Optional[float] = None,
+        heading2: Optional[float] = None,
     ) -> str:
         """
         Classify encounter using fairway-aligned coordinates.
@@ -395,11 +405,45 @@ class FairwayAxis:
         - Same direction ('upbound' vs 'upbound' or 'downbound' vs 'downbound'):
             - Along-fairway order flip (ds_start * ds_end < 0) -> 'overtaking'
             - No order flip -> 'parallel_sailing'
-        - Either vessel moving across fairway ('crossing') -> 'crossing'
+        - Either vessel outside fairway corridor -> fall back to relative heading/kinematics
+        - Either vessel moving across fairway ('crossing') -> 'crossing' (unless relative heading <= 45°)
         - Both stationary -> 'stationary'
         """
         if dir1 == "stationary" and dir2 == "stationary":
             return "stationary"
+
+        # If either vessel is outside the fairway corridor, use standard kinematic relative heading
+        if dir1 == "outside_fairway" or dir2 == "outside_fairway":
+            if heading1 is not None and heading2 is not None:
+                diff = (heading1 - heading2) % 360.0
+                rel_angle = min(diff, 360.0 - diff)
+                if rel_angle <= 45.0:
+                    order_flipped = (ds_start * ds_end < -1e-3)
+                    has_speed_diff = (abs(dv_along) >= 0.5) if dv_along is not None else False
+                    if order_flipped or (has_speed_diff and (ds_start * ds_end <= 0.0 and abs(ds_start - ds_end) > 1.0)):
+                        return "overtaking"
+                    elif abs(dv_along or 0.0) > 1.0 and abs(ds_start) > abs(ds_end):
+                        return "overtaking"
+                    return "parallel_sailing"
+                elif rel_angle >= 135.0:
+                    return "head-on"
+                else:
+                    return "crossing"
+            return "crossing"
+
+        # Vessels steering in the same general direction (rel_angle <= 45°) cannot be crossing each other
+        if heading1 is not None and heading2 is not None:
+            diff = (heading1 - heading2) % 360.0
+            rel_angle = min(diff, 360.0 - diff)
+            if rel_angle <= 45.0:
+                order_flipped = (ds_start * ds_end < -1e-3)
+                has_speed_diff = (abs(dv_along) >= 0.5) if dv_along is not None else False
+                if order_flipped or (has_speed_diff and (ds_start * ds_end <= 0.0 and abs(ds_start - ds_end) > 1.0)):
+                    return "overtaking"
+                elif abs(dv_along or 0.0) > 1.0 and abs(ds_start) > abs(ds_end):
+                    return "overtaking"
+                else:
+                    return "parallel_sailing"
 
         if dir1 == "crossing" or dir2 == "crossing":
             return "crossing"

@@ -1,6 +1,6 @@
 <!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
 <qgis layerType="Vector" styleCategories="Symbology|Temporal" version="4.2.1-Belém do Pará">
-  <temporal accumulate="0" durationField="MMSI" durationUnit="min" enabled="1" endExpression="&quot;segment_end_time&quot; + make_interval(minutes:=15)" endField="segment_end_time" fixedDuration="0" limitMode="0" mode="4" startExpression="" startField="segment_start_time">
+  <temporal accumulate="0" durationField="MMSI" durationUnit="min" enabled="1" endExpression="&quot;segment_end_time&quot; + make_interval(minutes:=15)" endField="segment_end_time" fixedDuration="0" limitMode="0" mode="4" startExpression="&quot;segment_start_time&quot;" startField="segment_start_time">
     <fixedRange>
       <start></start>
       <end></end>

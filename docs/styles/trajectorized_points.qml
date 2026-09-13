@@ -42,14 +42,19 @@
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
               <Option name="properties" type="Map">
+                <Option name="name" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360), 'circle', 'arrow')"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
                 <Option name="angle" type="Map">
                   <Option name="active" type="bool" value="true"/>
-                  <Option name="expression" type="QString" value="coalesce(&quot;heading&quot;, &quot;cog&quot;, 0)"/>
+                  <Option name="expression" type="QString" value="coalesce(if(&quot;heading&quot; &lt; 360, &quot;heading&quot;, null), if(&quot;cog&quot; &lt; 360, &quot;cog&quot;, null), 0)"/>
                   <Option name="type" type="int" value="3"/>
                 </Option>
                 <Option name="size" type="Map">
                   <Option name="active" type="bool" value="true"/>
-                  <Option name="expression" type="QString" value="coalesce(&quot;length&quot;, 25)"/>
+                  <Option name="expression" type="QString" value="if((&quot;heading&quot; is null or &quot;heading&quot; >= 360) and (&quot;cog&quot; is null or &quot;cog&quot; >= 360), coalesce(&quot;beam&quot;, 12), coalesce(&quot;length&quot;, 25))"/>
                   <Option name="type" type="int" value="3"/>
                 </Option>
               </Option>

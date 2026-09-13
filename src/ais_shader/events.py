@@ -746,18 +746,21 @@ def _evaluate_candidates_in_window(
         elif exclude_stationary in {'any', 'all'} and (is_stat_1 or is_stat_2):
             continue
 
+        dir1 = None
+        dir2 = None
         if fairway_axis is not None and fairway_dirs is not None:
             dir1 = fairway_dirs[idx1]
             dir2 = fairway_dirs[idx2]
             if dir1 and dir2:
                 enc_type = fairway_axis.classify_fairway_encounter(
-                    dir1, dir2, speed1, speed2, ds_start, ds_end, dv_along
+                    dir1, dir2, speed1, speed2, ds_start, ds_end, dv_along,
+                    heading1=heading1, heading2=heading2,
                 )
 
         overtaking_mmsi = None
         overtaken_mmsi = None
         if enc_type == 'overtaking':
-            if fairway_axis is not None and fairway_speeds is not None:
+            if fairway_axis is not None and fairway_speeds is not None and dir1 != "outside_fairway" and dir2 != "outside_fairway":
                 v_f1 = abs(float(fairway_speeds[idx1] if fairway_speeds[idx1] is not None else speed1))
                 v_f2 = abs(float(fairway_speeds[idx2] if fairway_speeds[idx2] is not None else speed2))
                 if v_f1 >= v_f2:
@@ -769,9 +772,16 @@ def _evaluate_candidates_in_window(
             elif dv_along > 0:
                 overtaking_mmsi = mmsi[idx1]
                 overtaken_mmsi = mmsi[idx2]
-            else:
+            elif dv_along < 0:
                 overtaking_mmsi = mmsi[idx2]
                 overtaken_mmsi = mmsi[idx1]
+            else:
+                if speed1 >= speed2:
+                    overtaking_mmsi = mmsi[idx1]
+                    overtaken_mmsi = mmsi[idx2]
+                else:
+                    overtaking_mmsi = mmsi[idx2]
+                    overtaken_mmsi = mmsi[idx1]
 
         # Determine source (active encountering vessel) vs target (encountered vessel/obstacle)
         if is_stat_1 and not is_stat_2:
@@ -1053,25 +1063,74 @@ def _merge_encounters(raw_df: pd.DataFrame, merge_gap_minutes: float) -> list:
         overall_dv_along = res.get('_dv_along', 0.0)
 
         enc_type = res['encounter_type']
-        overtaking_mmsi = None
-        overtaken_mmsi = None
+        overtaking_mmsi = res.get('overtaking_mmsi')
+        overtaken_mmsi = res.get('overtaken_mmsi')
 
-        if enc_type in {'overtaking', 'parallel_sailing'}:
+        h1 = res.get('heading_1')
+        h2 = res.get('heading_2')
+        if h1 is not None and h2 is not None and not np.isnan(h1) and not np.isnan(h2):
+            diff = (h1 - h2) % 360.0
+            rel_angle = min(diff, 360.0 - diff)
+        else:
+            rel_angle = 90.0
+
+        if enc_type in {'overtaking', 'parallel_sailing'} or rel_angle <= 45.0 or (overall_order_flipped and rel_angle <= 60.0):
             has_speed_diff = abs(overall_dv_along) >= 0.5
             if overall_order_flipped or (has_speed_diff and (initial_ds * final_ds <= 0.0 and abs(initial_ds - final_ds) > 1.0)):
                 enc_type = 'overtaking'
                 if overall_dv_along > 0:
                     overtaking_mmsi = res['mmsi_1']
                     overtaken_mmsi = res['mmsi_2']
-                else:
+                elif overall_dv_along < 0:
                     overtaking_mmsi = res['mmsi_2']
                     overtaken_mmsi = res['mmsi_1']
-            else:
+                else:
+                    s1 = res.get('speed_mps_1', 0.0) or 0.0
+                    s2 = res.get('speed_mps_2', 0.0) or 0.0
+                    if s1 >= s2:
+                        overtaking_mmsi = res['mmsi_1']
+                        overtaken_mmsi = res['mmsi_2']
+                    else:
+                        overtaking_mmsi = res['mmsi_2']
+                        overtaken_mmsi = res['mmsi_1']
+            elif rel_angle <= 45.0:
                 enc_type = 'parallel_sailing'
+                overtaking_mmsi = None
+                overtaken_mmsi = None
+            else:
+                overtaking_mmsi = None
+                overtaken_mmsi = None
 
         res['encounter_type'] = enc_type
         res['overtaking_mmsi'] = overtaking_mmsi
         res['overtaken_mmsi'] = overtaken_mmsi
+
+        is_stat_1 = bool(res.get('is_stationary_1', False))
+        is_stat_2 = bool(res.get('is_stationary_2', False))
+
+        if is_stat_1 and not is_stat_2:
+            res['source_mmsi'] = str(res['mmsi_2'])
+            res['target_mmsi'] = str(res['mmsi_1'])
+            res['role_1'] = 'stationary'
+            res['role_2'] = 'moving'
+        elif is_stat_2 and not is_stat_1:
+            res['source_mmsi'] = str(res['mmsi_1'])
+            res['target_mmsi'] = str(res['mmsi_2'])
+            res['role_1'] = 'moving'
+            res['role_2'] = 'stationary'
+        elif is_stat_1 and is_stat_2:
+            res['role_1'] = 'stationary'
+            res['role_2'] = 'stationary'
+        elif enc_type == 'overtaking' and overtaking_mmsi is not None:
+            res['source_mmsi'] = str(overtaking_mmsi)
+            res['target_mmsi'] = str(overtaken_mmsi)
+            m1_str = str(res['mmsi_1'])
+            m2_str = str(res['mmsi_2'])
+            res['role_1'] = 'overtaking' if m1_str == str(overtaking_mmsi) else 'overtaken'
+            res['role_2'] = 'overtaking' if m2_str == str(overtaking_mmsi) else 'overtaken'
+        elif enc_type == 'parallel_sailing':
+            res['role_1'] = 'moving'
+            res['role_2'] = 'moving'
 
     return records
 

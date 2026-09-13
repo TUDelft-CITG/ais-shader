@@ -174,3 +174,24 @@ def test_usace_builder_mock():
     assert axis.fairway_name == "MOCK-RIVER"
     assert np.isclose(axis.chainage_start_m, 10.0 * 1609.344)
     assert np.isclose(axis.length_m, 6437.376, atol=50.0)
+
+
+def test_fairway_encounter_outside_fairway_corridor():
+    # Centerline along x-axis
+    centerline = LineString([(0, 0), (10000, 0)])
+    axis = FairwayAxis(centerline, metric_crs="EPSG:3857")
+
+    # Both vessels far outside corridor (Morgan City style, rel_angle ~6 deg)
+    enc = axis.classify_fairway_encounter(
+        dir1="outside_fairway",
+        dir2="outside_fairway",
+        speed1=1.4,
+        speed2=3.5,
+        ds_start=50.0,
+        ds_end=-50.0,
+        dv_along=-2.1,
+        heading1=100.0,
+        heading2=106.0,
+    )
+    assert enc == "overtaking"
+
