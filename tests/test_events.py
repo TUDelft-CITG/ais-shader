@@ -340,4 +340,71 @@ def test_detect_encounters_custom_metric_crs():
     assert not ts.empty
 
 
+def test_detect_encounters_dask_client():
+    from dask.distributed import Client
+    client = Client(n_workers=2, threads_per_worker=1)
+    try:
+        segments_gdf = gpd.GeoDataFrame(
+            [
+                _make_segment('111', 'ship1', (0.0, 50.0), (0.0, 50.01), '2026-06-14 12:00:00', 600, sog=10.0),
+                _make_segment('222', 'ship2', (0.001, 50.01), (0.001, 50.0), '2026-06-14 12:00:00', 600, sog=10.0),
+            ],
+            crs="EPSG:4326"
+        )
+        encounters = detect_encounters(segments_gdf, max_distance_m=500.0, client=client)
+        assert len(encounters) == 1
+        assert encounters.iloc[0]['encounter_type'] == 'head-on'
+
+        ts = generate_encounter_timeseries(segments_gdf, encounters, step_seconds=30.0, client=client)
+        assert not ts.empty
+    finally:
+        client.close()
+
+
+def test_detect_encounters_exclude_stationary_modes():
+    from ais_shader.events import extract_stationary_vessels
+
+    # 3 vessels:
+    # A is stationary at (0.0, 50.0)
+    # B is stationary at (0.001, 50.0)
+    # C is moving past them: (0.0005, 49.99) -> (0.0005, 50.01) at 10 kn
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            _make_segment('111', 'shipA', (0.0, 50.0), (0.0, 50.0), '2026-06-14 12:00:00', 600, sog=0.0),
+            _make_segment('222', 'shipB', (0.001, 50.0), (0.001, 50.0), '2026-06-14 12:00:00', 600, sog=0.0),
+            _make_segment('333', 'shipC', (0.0005, 49.99), (0.0005, 50.01), '2026-06-14 12:00:00', 600, sog=10.0),
+        ],
+        crs="EPSG:4326"
+    )
+
+    # 1. Mode 'both': drops A-B (both stationary), keeps C-A and C-B (moving vs stationary target)
+    enc_both = detect_encounters(segments_gdf, max_distance_m=1000.0, exclude_stationary='both')
+    assert len(enc_both) == 2
+    pairs = set(zip(enc_both['mmsi_1'], enc_both['mmsi_2']))
+    assert ('111', '222') not in pairs  # A-B dropped
+    assert ('111', '333') in pairs      # A-C kept
+    assert ('222', '333') in pairs      # B-C kept
+
+    # Verify stationary flags
+    row_ac = enc_both[enc_both['mmsi_1'] == '111'].iloc[0]
+    assert bool(row_ac['is_stationary_1']) is True
+    assert bool(row_ac['is_stationary_2']) is False
+    assert row_ac['stationary_role'] == 'vessel_1'
+
+    # 2. Mode 'any': drops all encounters involving a stationary vessel -> 0 encounters
+    enc_any = detect_encounters(segments_gdf, max_distance_m=1000.0, exclude_stationary='any')
+    assert len(enc_any) == 0
+
+    # 3. Mode 'none': keeps all 3 pairs (including A-B)
+    enc_none = detect_encounters(segments_gdf, max_distance_m=1000.0, exclude_stationary='none')
+    assert len(enc_none) == 3
+
+    # 4. Extraction of stationary vessels
+    stat_vessels = extract_stationary_vessels(segments_gdf, min_moving_speed=0.5)
+    assert len(stat_vessels) == 2
+    assert set(stat_vessels['MMSI']) == {'111', '222'}
+
+
+
+
 

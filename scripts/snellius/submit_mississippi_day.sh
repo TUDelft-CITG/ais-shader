@@ -50,22 +50,22 @@ echo "==> Starting Dask Scheduler at ${SCHEDULER_URL}..."
 uv run dask-scheduler --host "${SCHEDULER_HOST}" --port 8786 --dashboard-address :8787 &
 SCHEDULER_PID=$!
 
-trap "kill ${SCHEDULER_PID} 2>/dev/null || true" EXIT
+trap "kill \$(jobs -p) 2>/dev/null || true" EXIT
 
 sleep 5
 
 echo "=========================================================================="
 echo " DASK DASHBOARD ACTIVE"
 echo " Run from your local terminal to forward (using local port 8788):"
-echo "   ssh -N -L 8788:${SCHEDULER_HOST}:8787 ${USER_NAME}@snellius.surf.nl"
+echo "   ssh -N -L 8788:${SCHEDULER_HOST}:8787 snellius"
 echo " Then browse: http://localhost:8788/status"
 echo "=========================================================================="
 
-echo "==> Starting Dask Workers (4 workers x 32 threads, 50GB memory each)..."
-srun uv run dask-worker "${SCHEDULER_URL}" \
-    --nthreads 32 \
-    --nworkers 4 \
-    --memory-limit 50GB \
+echo "==> Starting Dask Workers (16 workers x 8 threads, 13GB memory each)..."
+uv run dask-worker "${SCHEDULER_URL}" \
+    --nthreads 8 \
+    --nworkers 16 \
+    --memory-limit 13GB \
     --no-dashboard &
 
 sleep 10
@@ -109,20 +109,37 @@ else
     echo "==> [3/4] Segments already exist: $SEGS_PARQUET"
 fi
 
+# Preprocess fairway centerline if markers are present
+FAIRWAY_CENTERLINE="/scratch-shared/${USER_NAME}/data/marine-cadastre/mississippi_fairway_centerline_utm15n.geoparquet"
+if [ ! -f "$FAIRWAY_CENTERLINE" ] && [ -f "$FAIRWAY_MARKERS" ]; then
+    echo "==> [Fairway Preproc] Building metric fairway centerline using build-us-centerline..."
+    uv run ais-shader fairway build-us-centerline "$FAIRWAY_MARKERS" \
+        -o "$FAIRWAY_CENTERLINE" \
+        --river-name "MISSISSIPPI-LO" \
+        --metric-crs "EPSG:32615"
+fi
+
 # 6. Step 4: Detect encounters and generate dynamic time series connecting lines
 ENCOUNTERS_PARQUET="$DATA_DIR/mississippi_encounters.geoparquet"
 TIMESERIES_PARQUET="$DATA_DIR/mississippi_encounter_timeseries.geoparquet"
+STATIONARY_PARQUET="$DATA_DIR/mississippi_stationary_vessels.geoparquet"
 echo "==> [4/4] Detecting vessel encounters and generating dynamic time series..."
 FAIRWAY_ARG=""
-if [ -f "$FAIRWAY_MARKERS" ]; then
-    FAIRWAY_ARG="--fairway-markers $FAIRWAY_MARKERS --river-name MISSISSIPPI-LO"
+if [ -f "$FAIRWAY_CENTERLINE" ]; then
+    FAIRWAY_ARG="--fairway-markers $FAIRWAY_CENTERLINE --metric-crs EPSG:32615"
+elif [ -f "$FAIRWAY_MARKERS" ]; then
+    FAIRWAY_ARG="--fairway-markers $FAIRWAY_MARKERS --river-name MISSISSIPPI-LO --metric-crs EPSG:32615"
 fi
 
 uv run ais-shader events encounters "$SEGS_PARQUET" \
     -o "$ENCOUNTERS_PARQUET" \
     $FAIRWAY_ARG \
+    --scheduler "${SCHEDULER_URL}" \
+    --time-bin-minutes 15.0 \
     --timeseries-file "$TIMESERIES_PARQUET" \
     --timeseries-step 30.0 \
+    --stationary-file "$STATIONARY_PARQUET" \
+    --exclude-stationary both \
     --max-distance 600.0 \
     --merge-gap-minutes 10.0
 

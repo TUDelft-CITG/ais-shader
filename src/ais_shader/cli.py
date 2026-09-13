@@ -248,12 +248,24 @@ def convert_ndjson(input_file, output_file, scheduler):
     default=None,
     help="Spatial bounding box filter as 'min_lon,min_lat,max_lon,max_lat' (e.g. '-91.5,29.0,-89.0,31.0').",
 )
-def convert_csv(input_file, output_file, scheduler, bbox):
+@click.option(
+    "--start-time",
+    type=str,
+    default=None,
+    help="Optional start timestamp (UTC, e.g. '2026-03-31 00:00:00') to filter AIS points.",
+)
+@click.option(
+    "--end-time",
+    type=str,
+    default=None,
+    help="Optional end timestamp (UTC, e.g. '2026-03-31 03:00:00') to filter AIS points.",
+)
+def convert_csv(input_file, output_file, scheduler, bbox, start_time, end_time):
     """
     Convert a CSV (or zipped CSV) file (e.g. from aisdata.ais.dk or NOAA) to a standard flat GeoParquet file.
     """
     output_file = output_file or _default_output_path(input_file, ".geoparquet")
-    run_csv_conversion(input_file, output_file, scheduler, bbox=bbox)
+    run_csv_conversion(input_file, output_file, scheduler, bbox=bbox, start_time=start_time, end_time=end_time)
 
 
 @cli.command()
@@ -563,12 +575,18 @@ def to_linestring(input_file, output_file, vessel_codes_json):
          "chosen setting looks implausible given the data, but it is not "
          "auto-corrected.",
 )
-def to_segment(input_file, output_file, epoch_time, vessel_codes_json, sog_raw_units):
+@click.option(
+    "--metric-crs",
+    type=str,
+    default=None,
+    help="Optional target metric CRS (e.g. EPSG:32615) to project the generated segments into.",
+)
+def to_segment(input_file, output_file, epoch_time, vessel_codes_json, sog_raw_units, metric_crs):
     """
     Generate point-pair line segments from trajectorized point trajectories.
     """
     output_file = output_file or _default_output_path(input_file, "-segments.geoparquet")
-    run_segment_generation(input_file, output_file, sog_raw_units, epoch_time, vessel_codes_json)
+    run_segment_generation(input_file, output_file, sog_raw_units, epoch_time, vessel_codes_json, metric_crs=metric_crs)
 
 
 @click.group(name="events")
@@ -690,6 +708,24 @@ def polygon_entry_exit(input_file, polygons_file, polygon_id_col, merge_gap_minu
     help="Temporal sampling interval in seconds for encounter time series (default: 30s).",
 )
 @click.option(
+    "--exclude-stationary",
+    type=click.Choice(["both", "any", "none"], case_sensitive=False),
+    default="both",
+    help="Exclusion mode for stationary vessels: 'both' (default) drops pairs where both vessels are stationary (keeps stationary target vessels that moving ships can encounter); 'any' drops pairs where either vessel is stationary (moving-vs-moving only); 'none' keeps all pairs.",
+)
+@click.option(
+    "--stationary-file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional path to export stationary/anchored vessels to a separate GeoParquet table.",
+)
+@click.option(
+    "--min-speed",
+    type=float,
+    default=0.5,
+    help="Speed threshold in m/s below which a vessel is considered stationary (default: 0.5 m/s).",
+)
+@click.option(
     "--metric-crs",
     type=str,
     default=None,
@@ -702,7 +738,25 @@ def polygon_entry_exit(input_file, polygons_file, polygon_id_col, merge_gap_minu
     default=None,
     help="Path to output GeoParquet file. Defaults to input file name with -encounters.geoparquet extension.",
 )
-def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fairway_markers, river_name, timeseries_file, timeseries_step, metric_crs, output_file):
+@click.option(
+    "--scheduler",
+    type=str,
+    default=None,
+    help="Address of the Dask scheduler (e.g. 'tcp://host:8786').",
+)
+@click.option(
+    "--start-time",
+    type=str,
+    default=None,
+    help="Optional start timestamp (UTC, e.g. '2026-03-31 00:00:00') to filter input segments.",
+)
+@click.option(
+    "--end-time",
+    type=str,
+    default=None,
+    help="Optional end timestamp (UTC, e.g. '2026-03-31 03:00:00') to filter input segments.",
+)
+def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fairway_markers, river_name, timeseries_file, timeseries_step, exclude_stationary, stationary_file, min_speed, metric_crs, output_file, scheduler, start_time, end_time):
     """
     Detect vessel encounters (crossings, overtakings, head-on meetings) from a segment table.
     """
@@ -714,13 +768,102 @@ def encounters(input_file, max_distance, time_bin_minutes, merge_gap_minutes, fa
         max_distance_m=max_distance,
         time_bin_minutes=time_bin_minutes,
         merge_gap_minutes=gap,
+        exclude_stationary=exclude_stationary.lower(),
+        min_moving_speed=min_speed,
         fairway_axis=fairway_markers,
         river_name=river_name,
         timeseries_file=timeseries_file,
         timeseries_step_seconds=timeseries_step,
+        stationary_file=stationary_file,
         metric_crs=metric_crs,
+        scheduler=scheduler,
+        start_time=start_time,
+        end_time=end_time,
     )
 
+
+
+
+@click.group(name="fairway")
+def fairway():
+    """Inland fairway centerline extraction and preprocessing."""
+    pass
+
+
+@fairway.command(name="build-us-centerline")
+@click.argument(
+    "markers-file",
+    type=click.Path(exists=True, path_type=Path),
+)
+@click.option(
+    "--output-file",
+    "-o",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Path to output continuous fairway centerline GeoParquet or GeoPackage.",
+)
+@click.option(
+    "--river-name",
+    default="MISSISSIPPI-LO",
+    help="Name of the river to extract from USACE mile markers (default: MISSISSIPPI-LO).",
+)
+@click.option(
+    "--metric-crs",
+    default="EPSG:32615",
+    help="Target metric projected CRS (default: EPSG:32615 for Mississippi UTM 15N).",
+)
+@click.option(
+    "--clip-bbox",
+    type=str,
+    default=None,
+    help="Optional bounding box 'minx,miny,maxx,maxy' in EPSG:4326 to clip the centerline.",
+)
+@click.option(
+    "--spline-sample-interval",
+    type=float,
+    default=50.0,
+    help="Sample interval in meters along the fitted spline (default: 50.0m).",
+)
+@click.option(
+    "--spline-smoothing",
+    type=float,
+    default=5000.0,
+    help="Spline smoothing parameter (default: 5000.0).",
+)
+def build_us_centerline(
+    markers_file, output_file, river_name, metric_crs, clip_bbox, spline_sample_interval, spline_smoothing
+):
+    """
+    Fit a continuous, metric B-spline fairway centerline from USACE River Mile Markers and save to disk.
+    """
+    from .usace import build_usace_fairway
+    logger.info(f"Loading USACE mile markers from {markers_file} (river={river_name})...")
+    axis = build_usace_fairway(
+        markers_file,
+        river_name=river_name,
+        metric_crs=metric_crs,
+        spline_sample_interval_m=spline_sample_interval,
+        spline_smoothing=spline_smoothing,
+    )
+    bbox = None
+    if clip_bbox:
+        coords = [float(x.strip()) for x in clip_bbox.split(",")]
+        if len(coords) != 4:
+            raise ValueError(f"clip-bbox must have 4 comma-separated values, got {clip_bbox}")
+        bbox = tuple(coords)
+
+    gdf = axis.to_geodataframe(crs=metric_crs, clip_bbox=bbox)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Saving continuous metric fairway centerline ({axis.fairway_name}, length={gdf['length_km'].iloc[0]} km) to {output_file}...")
+    if output_file.suffix in [".parquet", ".geoparquet"]:
+        gdf.to_parquet(output_file)
+    else:
+        gdf.to_file(output_file)
+    logger.info("Fairway centerline preprocessing complete.")
+
+
+# Backwards compatibility alias
+fairway.add_command(build_us_centerline, name="build-centerline")
 
 
 # Register trajectory commands
@@ -729,7 +872,10 @@ cli.add_command(trajectory)
 cli.add_command(convert)
 # Register events commands
 cli.add_command(events)
+# Register fairway commands
+cli.add_command(fairway)
 
 
 if __name__ == "__main__":
     cli()
+
