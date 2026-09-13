@@ -68,16 +68,11 @@ DEFAULT_FAIRWAY_NAME = "Amsterdam-Rijnkanaal"
 DEFAULT_METRIC_CRS = "EPSG:28992"  # Amersfoort / RD New
 
 
-def classify_vessel_group(shiptype: any, length: Optional[float] = None) -> str:
+def classify_vessel_group(shiptype: any) -> str:
     """
     Classify vessel into Marine Cadastre / ais-shader standard vessel groups.
-    If AIS ship type is 0 or unspecified, infer commercial cargo if length >= 30m.
     """
-    group = get_vessel_group(shiptype, {})
-    if group == "Other":
-        if length is not None and not pd.isna(length) and length >= 30.0:
-            return "Cargo"
-    return group
+    return get_vessel_group(shiptype, {})
 
 
 def make_segments_from_points(
@@ -91,15 +86,32 @@ def make_segments_from_points(
     Returns:
         (gdf_pts_metric, gdf_segs_metric)
     """
+    if gdf_pts.empty:
+        raise ValueError("Input AIS points GeoDataFrame is empty.")
+    if gdf_pts.crs is None:
+        raise ValueError("Input AIS points must have a defined Coordinate Reference System (CRS).")
+
+    if "base_date_time" in gdf_pts.columns:
+        time_col = "base_date_time"
+    elif "timestamp" in gdf_pts.columns:
+        time_col = "timestamp"
+    else:
+        raise KeyError("Input AIS data must contain 'base_date_time' or 'timestamp' column.")
+
+    if "mmsi" in gdf_pts.columns:
+        vessel_col = "mmsi"
+    elif "MMSI" in gdf_pts.columns:
+        vessel_col = "MMSI"
+    else:
+        raise KeyError("Input AIS data must contain 'mmsi' or 'MMSI' column.")
+
     logger.info(f"Projecting {len(gdf_pts):,} point fixes to metric CRS ({metric_crs})...")
     gdf_metric = gdf_pts.to_crs(metric_crs)
-
-    time_col = "base_date_time" if "base_date_time" in gdf_metric.columns else "timestamp"
     gdf_metric[time_col] = pd.to_datetime(gdf_metric[time_col])
 
     if "trip_id" not in gdf_metric.columns:
         logger.info("Assigning single trip_id per MMSI...")
-        gdf_metric["trip_id"] = gdf_metric["mmsi"].astype(str) + "_voyage1"
+        gdf_metric["trip_id"] = gdf_metric[vessel_col].astype(str) + "_voyage1"
 
     logger.info("Constructing 2-point line segments from consecutive fixes...")
     sorted_df = gdf_metric.sort_values(by=["trip_id", time_col]).reset_index(drop=True)
@@ -152,7 +164,7 @@ def make_segments_from_points(
     shiptypes = p1["shiptypeAIS"].values if "shiptypeAIS" in p1.columns else np.full(len(p1), 0)
 
     vessel_groups = [
-        classify_vessel_group(st, l) for st, l in zip(shiptypes[valid], lengths[valid])
+        classify_vessel_group(st) for st in shiptypes[valid]
     ]
     durations_s = durations[valid]
     durations_m = np.round(durations_s / 60.0, 2)
@@ -216,7 +228,7 @@ def make_trajectories_from_points(
         vessel_name = grp["name"].iloc[0] if "name" in grp.columns else ""
         mmsi = grp["mmsi"].iloc[0] if "mmsi" in grp.columns else (grp["MMSI"].iloc[0] if "MMSI" in grp.columns else str(trip_id))
 
-        vgroup = classify_vessel_group(shiptype, length)
+        vgroup = classify_vessel_group(shiptype)
 
         records.append({
             "MMSI": mmsi,
@@ -315,8 +327,7 @@ def run_euris_encounter_detection(
     # Also filter points within corridor for display
     pts_in_corridor = gdf_pts_metric[gdf_pts_metric.geometry.intersects(corridor_poly)].copy().reset_index(drop=True)
     pts_st = pts_in_corridor["shiptypeAIS"] if "shiptypeAIS" in pts_in_corridor.columns else [0] * len(pts_in_corridor)
-    pts_len = pts_in_corridor["length"] if "length" in pts_in_corridor.columns else [np.nan] * len(pts_in_corridor)
-    pts_in_corridor["VesselGroup"] = [classify_vessel_group(st, l) for st, l in zip(pts_st, pts_len)]
+    pts_in_corridor["VesselGroup"] = [classify_vessel_group(st) for st in pts_st]
 
     # 3b. Build Continuous Voyage Trajectories within Fairway Corridor
     logger.info("Building continuous voyage trajectories from corridor fixes...")

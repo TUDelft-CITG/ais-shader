@@ -1,5 +1,6 @@
 import geopandas as gpd
 import pandas as pd
+import pytest
 from shapely.geometry import LineString, Polygon
 from ais_shader.events import (
     detect_line_crossings,
@@ -477,8 +478,12 @@ def test_detect_encounters_overtaking_outside_fairway():
     assert enc['role_2'] == 'overtaking'
 
 
-
-
-
-
-
+def test_detect_encounters_missing_crs():
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            _make_segment('111', 'ship1', (0.0, 0.0), (0.0, 0.1), '2026-06-14 12:00:00', 600),
+        ]
+    )
+    segments_gdf.crs = None
+    with pytest.raises(ValueError, match="segments_gdf must have a defined Coordinate Reference System"):
+        detect_encounters(segments_gdf)

@@ -116,7 +116,7 @@ class FairwayAxis:
 
         geom = gdf.geometry.iloc[0]
         if geom.geom_type == "MultiLineString":
-            geom = max(geom.geoms, key=lambda g: g.length)
+            raise ValueError(f"Fairway geometry at {p} must be a continuous LineString, got MultiLineString.")
         if not gdf.crs:
             raise ValueError(f"Fairway file at {p} must have a defined Coordinate Reference System (CRS).")
         metric_crs = f"EPSG:{gdf.crs.to_epsg()}" if gdf.crs.to_epsg() else str(gdf.crs)

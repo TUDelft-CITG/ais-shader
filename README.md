@@ -31,6 +31,11 @@ Normalized lateral crossing speed/frequency profiles calculated across passage l
 
 ![Lateral Crossing Profiles](docs/images/profiles.png)
 
+### Dutch Inland Encounter Detection (Amsterdam-Rijnkanaal)
+Vessel encounters, dynamic CPA connecting lines, and trajectory vectors along Dutch inland waterways (EURIS AIS live crawl and Rijkswaterstaat FIS fairway centerline) visualized in QGIS with embedded GeoPackage layer styles.
+
+![Dutch Inland Vessel Encounters](docs/images/dutch_inland_encounters.png)
+
 ### Spatio-Temporal Partitioning (Space-First Hilbert Indexing)
 We partition the space-time $(x, y, t)$ coordinates using a **Spatially-Dominant (Space-First) Space-Time index**:
 1. **2D Spatial Locality**: We first map the spatial $(x, y)$ coordinates to a 1D scalar using a high-precision 2D Hilbert Curve ($p=16$). This guarantees clean, non-overlapping spatial boundaries for partitions on the map.

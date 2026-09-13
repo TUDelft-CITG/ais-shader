@@ -92,13 +92,21 @@ def query_rws_arcgis_layer(
     with urllib.request.urlopen(req) as resp:
         content = resp.read().decode("utf-8")
 
+    data = json.loads(content)
+    if isinstance(data, dict) and "error" in data:
+        err = data["error"]
+        raise RuntimeError(
+            f"ArcGIS MapServer layer {layer_id} returned error {err.get('code')}: {err.get('message')} ({err.get('details', [])})"
+        )
+
     if not return_geometry:
-        data = json.loads(content)
         records = [feat["attributes"] for feat in data.get("features", [])]
         return pd.DataFrame(records)
 
     gdf = gpd.read_file(content)
-    if out_crs and gdf.crs is not None and gdf.crs.to_string() != out_crs:
+    if gdf.crs is None:
+        raise ValueError(f"ArcGIS layer {layer_id} returned GeoDataFrame without a CRS.")
+    if out_crs and gdf.crs.to_string() != out_crs:
         gdf = gdf.to_crs(out_crs)
     return gdf
 
@@ -143,6 +151,9 @@ def fetch_rws_fairway_sections(
     enrich_metadata : bool
         Whether to join layer 55 (vaarwegen) to add official names and VIN codes.
     """
+    if fairway_id is None and name is None and bbox is None:
+        raise ValueError("Must specify at least one of fairway_id, name, or bbox.")
+
     where_parts = []
     if fairway_id is not None:
         if isinstance(fairway_id, (list, tuple, set)):
@@ -180,18 +191,15 @@ def fetch_rws_fairway_sections(
     )
 
     if enrich_metadata and not gdf.empty:
-        try:
-            meta_df = fetch_rws_fairways_metadata(bbox=bbox)
-            if not meta_df.empty:
-                id_to_name: Dict[int, str] = dict(zip(meta_df["id"], meta_df["name"]))
-                id_to_vin: Dict[int, str] = dict(zip(meta_df["id"], meta_df["vincode"]))
-                id_to_cemt: Dict[int, str] = dict(zip(meta_df["id"], meta_df["cemtclass"]))
+        meta_df = fetch_rws_fairways_metadata(bbox=bbox)
+        if not meta_df.empty:
+            id_to_name: Dict[int, str] = dict(zip(meta_df["id"], meta_df["name"]))
+            id_to_vin: Dict[int, str] = dict(zip(meta_df["id"], meta_df["vincode"]))
+            id_to_cemt: Dict[int, str] = dict(zip(meta_df["id"], meta_df["cemtclass"]))
 
-                gdf["fairway_name"] = gdf["fairwayid"].map(id_to_name)
-                gdf["vincode"] = gdf["fairwayid"].map(id_to_vin)
-                gdf["cemtclass"] = gdf["fairwayid"].map(id_to_cemt)
-        except Exception as e:
-            logger.warning(f"Could not enrich fairway sections with layer 55 metadata: {e}")
+            gdf["fairway_name"] = gdf["fairwayid"].map(id_to_name)
+            gdf["vincode"] = gdf["fairwayid"].map(id_to_vin)
+            gdf["cemtclass"] = gdf["fairwayid"].map(id_to_cemt)
 
     return gdf
 
@@ -204,6 +212,9 @@ def fetch_rws_kilometer_markers(
     """
     Fetch official hectometer and kilometer markers (layer 11) from Rijkswaterstaat FIS VNDS.
     """
+    if fairway_id is None and bbox is None:
+        raise ValueError("Must specify at least one of fairway_id or bbox.")
+
     where_parts = []
     if fairway_id is not None:
         if isinstance(fairway_id, (list, tuple, set)):
@@ -253,9 +264,13 @@ def build_rws_fairway(
             gdf = data.copy()
         else:
             raise TypeError("data must be a filepath or GeoDataFrame.")
-        if gdf.crs is not None and gdf.crs.to_string() != metric_crs:
+        if gdf.crs is None:
+            raise ValueError("Input data has no CRS set.")
+        if gdf.crs.to_string() != metric_crs:
             gdf = gdf.to_crs(metric_crs)
     else:
+        if fairway_id is None and river_name is None and bbox is None:
+            raise ValueError("Must specify at least one of data, fairway_id, river_name, or bbox.")
         gdf = fetch_rws_fairway_sections(
             fairway_id=fairway_id,
             name=river_name,
@@ -266,9 +281,11 @@ def build_rws_fairway(
     if gdf.empty:
         raise ValueError(f"No fairway sections found for fairway_id={fairway_id}, river_name={river_name}.")
 
-    # Sort sections by route kilometrierung if present
-    if "routekmbegin" in gdf.columns:
-        gdf = gdf.sort_values("routekmbegin").reset_index(drop=True)
+    if "routekmbegin" not in gdf.columns:
+        raise KeyError("Fairway sections must contain 'routekmbegin' column for chainage ordering and orientation.")
+
+    # Sort sections by route kilometrierung
+    gdf = gdf.sort_values("routekmbegin").reset_index(drop=True)
 
     geoms = gdf.geometry.tolist()
     merged = linemerge(geoms)
@@ -276,12 +293,11 @@ def build_rws_fairway(
     if merged.is_empty:
         raise ValueError("Failed to merge fairway section geometries.")
 
-    # If linemerge returns a MultiLineString (e.g. slight gap or branch), pick the longest main channel
     if isinstance(merged, MultiLineString):
-        logger.warning(
-            f"Fairway linemerge produced {len(merged.geoms)} segments; selecting the longest continuous line."
+        raise ValueError(
+            f"Fairway section geometries do not form a single continuous line (linemerge produced {len(merged.geoms)} disjoint parts). "
+            "Verify that input fairway sections are contiguous."
         )
-        line_geom = max(merged.geoms, key=lambda g: g.length)
     elif isinstance(merged, LineString):
         line_geom = merged
     else:

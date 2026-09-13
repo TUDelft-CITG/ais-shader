@@ -232,5 +232,28 @@ uv run ais-shader events encounters \
     --exclude-stationary both \
     --stationary-file /data/mississippi_stationary_vessels.geoparquet \
     --timeseries-file /data/mississippi_encounter_timeseries.geoparquet \
-    --timeseries-step 30.0
 ```
+
+---
+
+## 9. Dutch Inland Waterways (EURIS & RWS FIS) Integration
+
+The encounter methodology is fully adapted to Dutch inland waterways using **Rijkswaterstaat (RWS) Fairway Information Services (FIS VNDS)** and **EURIS AIS** live stream crawls.
+
+![Dutch Inland Vessel Encounters](images/dutch_inland_encounters.png)
+
+*Figure: Two cargo vessels navigating northbound along the Amsterdam-Rijnkanaal near Breukelen. The CPA midpoint (magenta circle) and dynamic synchronous connecting lines (magenta lines) show the overtaking event visualized in QGIS using embedded GeoPackage layer styles.*
+
+### Multi-Layer GeoPackage Export
+Instead of loose parquet files, the Dutch pipeline packages all fairway and encounter layers into a self-contained GeoPackage in Dutch National Grid coordinates (`EPSG:28992` - Amersfoort / RD New):
+
+1. `fairway_centerline`: Continuous 1D navigation axis constructed from RWS ArcGIS MapServer Layer 58 (`vaarwegvak`).
+2. `fairway_sections`: Official RWS fairway sections with kilometer markings (`routekmbegin` to `routekmend`) and fairway names.
+3. `trajectorized_points`: Point fixes with boat dimensions, speed, and heading/COG arrows.
+4. `trajectories`: Continuous voyage LineStrings per trip with `TrackStartTime` and `TrackEndTime`.
+5. `segments`: Consecutive point-to-point line segments classified by vessel group.
+6. `stationary_vessels`: Moored and anchored vessels identified as potential navigation obstacles.
+7. `encounters`: Detected CPA encounter events (overtakings, head-on meetings, crossings, stationary passings).
+8. `timeseries`: Synchronous dynamic connecting lines between interacting vessels at 15s intervals.
+
+Layer symbology and QGIS Temporal Controller settings are directly embedded into the `.gpkg` SQLite `layer_styles` table.

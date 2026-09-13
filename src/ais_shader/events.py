@@ -911,10 +911,13 @@ def detect_encounters(
     if pd.isna(t_min) or pd.isna(t_max):
         return gpd.GeoDataFrame({c: [] for c in ENCOUNTER_COLS}, geometry=[], crs="EPSG:4326")
 
+    if gdf.crs is None:
+        raise ValueError("segments_gdf must have a defined Coordinate Reference System (CRS).")
+
     if metric_crs is None:
         if fairway_axis is not None:
             metric_crs = fairway_axis.metric_crs
-        elif gdf.crs is not None and gdf.crs.is_projected:
+        elif gdf.crs.is_projected:
             metric_crs = str(gdf.crs)
         else:
             bounds = gdf.total_bounds
@@ -922,7 +925,7 @@ def detect_encounters(
             mean_lat = float((bounds[1] + bounds[3]) / 2.0)
             metric_crs = get_utm_crs_for_lon_lat(mean_lon, mean_lat)
 
-    if gdf.crs is not None and pyproj.CRS.from_user_input(gdf.crs) != pyproj.CRS.from_user_input(metric_crs):
+    if pyproj.CRS.from_user_input(gdf.crs) != pyproj.CRS.from_user_input(metric_crs):
         if client is not None and len(gdf) > 50000:
             logger.info(f"Projecting {len(gdf):,} segments to metric CRS ({metric_crs}) across Dask workers...")
             n_workers = len(client.scheduler_info().get('workers', {})) or 4

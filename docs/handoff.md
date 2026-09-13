@@ -54,6 +54,25 @@
   ```
   with semi-transparency (`alpha="0.438"`) and shape switching (circle for uninstrumented/zero-speed vessels, arrow for moving vessels).
 
+#### 5. Strict Fail-Fast Validation (No Silent Workarounds)
+* **Design Rule**: If invalid or underspecified inputs are provided, the code raises explicit errors (`ValueError`, `KeyError`, `RuntimeError`) rather than silently fixing or guessing.
+* **Checks Enforced**:
+  - `build_rws_fairway`:
+    - Rejects input GeoDataFrames without a CRS (`ValueError: Input data has no CRS set.`).
+    - Requires at least one query filter if `data is None` (`ValueError: Must specify at least one of data, fairway_id, river_name, or bbox.`).
+    - Requires `routekmbegin` column for chainage ordering (`KeyError`).
+    - Rejects disconnected multi-part lines instead of picking the longest line (`ValueError: Fairway section geometries do not form a single continuous line...`).
+  - `fetch_rws_fairway_sections` & `fetch_rws_kilometer_markers`:
+    - Requires at least one filter parameter (`fairway_id`, `name`, `bbox`).
+    - In `query_rws_arcgis_layer`, checks response JSON and raises `RuntimeError` on server error messages.
+  - `FairwayAxis.from_file`:
+    - Rejects `MultiLineString` inputs (`ValueError`).
+  - `detect_encounters`:
+    - Rejects `segments_gdf` without CRS (`ValueError: segments_gdf must have a defined Coordinate Reference System (CRS).`).
+  - `make_segments_from_points`:
+    - Rejects empty datasets, missing CRS, or missing timestamp/vessel columns.
+    - Removed heuristic guessing that unknown vessels with length $\ge 30\text{ m}$ are "Cargo".
+
 ---
 
 ## 2. Environment & Tooling
@@ -90,4 +109,5 @@ uv run python scripts/generate_qgis_styles.py
 | Master GeoPackage | `/scratch-shared/fbaart/data/euris_crawl/euris_encounters.gpkg` | 8-layer Dutch inland encounters dataset in `EPSG:28992` with embedded QGIS styles |
 | 30-min EURIS Crawl | `/scratch-shared/fbaart/data/euris_crawl/euris_crawl_20260913_174753.geoparquet` | 36,360 raw fixes across the Netherlands |
 | QGIS QML Styles | `docs/styles/*.qml` | Standalone QML style definitions with temporal controller support |
+| Example Screenshot | `docs/images/dutch_inland_encounters.png` | QGIS visualization of overtaking encounter on the Amsterdam-Rijnkanaal |
 | Mississippi Dataset | `/scratch-shared/fbaart/data/mississippi_1h/` | Complete 1-hour Mississippi reference dataset |
