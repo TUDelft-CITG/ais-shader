@@ -1,0 +1,183 @@
+direction: down
+
+classes: {
+  process: {
+    style: {
+      stroke-width: 2
+      shadow: true
+      border-radius: 5
+    }
+  }
+  data: {
+    shape: cylinder
+    style: {
+      fill: "#e1f5fe"
+      stroke: "#01579b"
+    }
+  }
+  artifact: {
+    shape: document
+    style: {
+      fill: "#fff3e0"
+      stroke: "#e65100"
+    }
+  }
+}
+
+raw_ais: Raw AIS Data (CSV/Parquet) {
+  class: data
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/database.svg
+}
+
+convert: Convert & Filter {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/swap-horizontal.svg
+  tooltip: "ais-shader convert csv --bbox, --start-time, --end-time"
+}
+
+points: Flat GeoParquet Points {
+  class: data
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/layers.svg
+}
+
+trajectorize: Trajectorize {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/routes.svg
+  tooltip: "Voyage segmentation per vessel"
+}
+
+to_segment: Metric Segment Generation {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/vector-line.svg
+  tooltip: "ais-shader trajectory to-segment --metric-crs (e.g. EPSG:32615)"
+}
+
+segments: Metric 2-Point Segments {
+  class: artifact
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/layers.svg
+  tooltip: "segments_utm15n.geoparquet"
+}
+
+markers: Fairway Reference Data {
+  class: data
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/map-marker-path.svg
+  tooltip: "USACE River Miles or Inland Fairway GeoJSON/Parquet"
+}
+
+build_fairway: Build Fairway Centerline {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/vector-polyline.svg
+  tooltip: "Cubic B-Spline interpolation along waterway centerline"
+}
+
+fairway_line: Metric Fairway Centerline {
+  class: artifact
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/vector-polyline.svg
+  tooltip: "fairway_centerline_utm15n.geoparquet"
+}
+
+frenet_proj: Frenet-Serret Projection & Kinematics {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/axis-arrow.svg
+  tooltip: "cKDTree projection: chainage (s), cross-track (n), along-fairway velocity (v_s), cross-fairway velocity (v_n)"
+}
+
+decision_stat: Speed < min_speed? {
+  shape: diamond
+  tooltip: "v < 0.5 m/s or fairway_direction == 'stationary'"
+}
+
+extract_stat: Extract Stationary Objects {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/anchor.svg
+  tooltip: "extract_stationary_vessels: dwell location, chainage s, cross-track n, dimensions"
+}
+
+stationary_catalog: Stationary Vessel Catalog {
+  class: artifact
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/anchor.svg
+  tooltip: "stationary_vessels.geoparquet -- moored/fleeted barge obstacles"
+}
+
+time_binning: Temporal Window Binning {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/clock-outline.svg
+  tooltip: "Sliding time windows (e.g. 15 min)"
+}
+
+str_tree: Shapely STRtree Spatial Query {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/select-all.svg
+  tooltip: "Buffered envelope spatial query (max_distance_m)"
+}
+
+cpa_solver: Analytical Continuous CPA {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/target.svg
+  tooltip: "Exact quadratic minimum distance solution: tau* = -(R0 . delta_v) / ||delta_v||^2"
+}
+
+decision_exclude_stat: Exclude Stationary? {
+  shape: diamond
+  tooltip: "--exclude-stationary policy (both | any | none)"
+}
+
+classify_fairway: Fairway Encounter Classification {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/compass-outline.svg
+  tooltip: "Resolves bend divergence: head-on, overtaking (order flip), parallel sailing, crossing, stationary passing"
+}
+
+merge_dyads: Temporal Dyad Merging {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/arrow-collapse-horizontal.svg
+  tooltip: "Merge consecutive alerts within merge_gap_minutes, retain global min distance CPA"
+}
+
+encounters_table: Encounter Events {
+  class: artifact
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/alert-circle-outline.svg
+  tooltip: "encounters.geoparquet -- dyad IDs, CPA time/distance, encounter type, stationary role"
+}
+
+timeseries_gen: Dynamic Time Series Generator {
+  class: process
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/chart-timeline-variant.svg
+  tooltip: "Interpolates vessel positions at regular step_seconds and CPA timestamp"
+}
+
+timeseries_lines: Dynamic Time Series Connecting Lines {
+  class: artifact
+  icon: https://raw.githubusercontent.com/Templarian/MaterialDesign/master/svg/chart-line-variant.svg
+  tooltip: "encounter_timeseries.geoparquet -- 2-point connecting LineStrings for QGIS/Kepler playback"
+}
+
+raw_ais -> convert: "Stream/Slice"
+convert -> points: "UTC Points"
+points -> trajectorize: "Segment voyages"
+trajectorize -> to_segment: "Generate 2-point lines"
+to_segment -> segments: "Project to metric CRS"
+
+markers -> build_fairway: "Cubic spline"
+build_fairway -> fairway_line: "Export metric axis"
+
+segments -> frenet_proj: "Vessel segments"
+fairway_line -> frenet_proj: "Fairway axis"
+
+frenet_proj -> decision_stat: "Check velocity"
+decision_stat -> extract_stat: "v < 0.5 m/s"
+extract_stat -> stationary_catalog: "Save static obstacle catalog"
+
+frenet_proj -> time_binning: "All annotated segments"
+time_binning -> str_tree: "Spatio-temporal window"
+str_tree -> cpa_solver: "Candidate pairs (mmsi_1 < mmsi_2)"
+
+cpa_solver -> decision_exclude_stat: "d_cpa <= max_dist & role check"
+decision_exclude_stat -> classify_fairway: "Passed (e.g. role != 'both')"
+
+classify_fairway -> merge_dyads: "Raw encounter alerts"
+merge_dyads -> encounters_table: "Final encounter events"
+
+encounters_table -> timeseries_gen: "Encounter dyads"
+segments -> timeseries_gen: "Trajectory lookup"
+timeseries_gen -> timeseries_lines: "Sync playback lines"
