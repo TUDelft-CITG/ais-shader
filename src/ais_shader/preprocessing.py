@@ -1,9 +1,11 @@
+import datetime
 import functools
 import json
 import logging
 import shutil
 import zipfile
 from pathlib import Path
+from typing import Any, Optional, Union
 import dask.bag as db
 import dask.dataframe as dd
 import dask_geopandas
@@ -106,7 +108,7 @@ def get_vessel_group(shiptype, vessel_mapping: dict) -> str:
     are looked up in vessel_mapping (see build_vessel_mapping), supplied via
     --vessel-codes-json, since there's no universal string vocabulary to bake in.
     """
-    if not shiptype:
+    if pd.isna(shiptype) or not shiptype:
         return "Other"
     try:
         code = int(float(shiptype))
@@ -192,28 +194,83 @@ def _warn_if_sog_units_implausible(sog_after_scaling, raw_units: bool, invalid_m
             )
 
 
+def to_utc_datetime(
+    data: Any,
+    format: Optional[str] = None,
+    errors: str = "coerce",
+) -> Any:
+    """
+    Single canonical point of entry in preprocessing to handle and enforce UTC datetime.
+
+    Converts any input (string, datetime, pd.Timestamp, pd.Series, pd.DatetimeIndex)
+    to UTC and then strips the timezone (tz-naive datetime64[ns] referencing UTC).
+    All downstream computations operate strictly in UTC without tz-aware/naive mismatch issues.
+    """
+    if data is None:
+        return None
+
+    if isinstance(data, pd.Timestamp):
+        if data.tz is not None:
+            data = data.tz_convert("UTC")
+        return data.tz_localize(None)
+
+    if isinstance(data, datetime.datetime):
+        if data.tzinfo is not None:
+            data = pd.Timestamp(data).tz_convert("UTC")
+        return pd.Timestamp(data).tz_localize(None)
+
+    if isinstance(data, np.datetime64):
+        if np.isnat(data):
+            return pd.NaT
+        return pd.Timestamp(data).tz_localize(None)
+
+    if isinstance(data, (str, bytes)):
+        ts = pd.to_datetime(data, format=format, errors=errors, utc=True)
+        if hasattr(ts, "tz_localize"):
+            return ts.tz_localize(None)
+        return ts
+
+    if isinstance(data, pd.Series):
+        s = pd.to_datetime(data, format=format, errors=errors, utc=True)
+        return s.dt.tz_localize(None)
+
+    if isinstance(data, pd.DatetimeIndex):
+        idx = pd.to_datetime(data, format=format, errors=errors, utc=True)
+        return idx.tz_localize(None)
+
+    res = pd.to_datetime(data, format=format, errors=errors, utc=True)
+    if hasattr(res, "tz_localize"):
+        return res.tz_localize(None)
+    if hasattr(res, "dt"):
+        return res.dt.tz_localize(None)
+    return res
+
+
+def to_epoch_seconds(time_series: pd.Series) -> np.ndarray:
+    """
+    Convert a datetime Series to epoch seconds (float64) in UTC.
+    """
+    time_utc = to_utc_datetime(time_series)
+    return time_utc.values.astype('datetime64[s]').astype('float64')
+
+
 def strip_tz_and_epoch_seconds(time_series: pd.Series) -> np.ndarray:
     """
     Convert a datetime Series to epoch seconds (float64), tolerating tz-aware
-    input. `.values.astype('datetime64[s]')` on a tz-aware column returns an
-    object array of Timestamps (not a numpy datetime64 array), and the
-    subsequent astype raises -- so tz must be dropped first, matching
-    add_hilbert_index's handling in moving_dask/trajectory.py.
+    or naive input. Standardizes to UTC first.
     """
-    if hasattr(time_series.dt, "tz") and time_series.dt.tz is not None:
-        time_series = time_series.dt.tz_localize(None)
-    return time_series.values.astype('datetime64[s]').astype('float64')
+    return to_epoch_seconds(time_series)
 
 
 def normalize_to_epoch(df: pd.DataFrame, time_col: str = 'base_date_time') -> pd.DataFrame:
-    """Normalizes timestamps in a vessel trajectory dataframe to be epoch-relative (starting at 1970-01-01)."""
+    """Normalizes timestamps in a vessel trajectory dataframe to be epoch-relative (starting at 1970-01-01 UTC)."""
     if len(df) == 0:
         return df
     if 'trip_id' in df.columns:
+        df[time_col] = to_utc_datetime(df[time_col])
         start_times = df.groupby('trip_id')[time_col].transform('min')
         offsets = df[time_col] - start_times
-        tz = df[time_col].dt.tz
-        epoch_base = pd.Timestamp('1970-01-01 00:00:00', tz=tz)
+        epoch_base = pd.Timestamp('1970-01-01 00:00:00', tz='UTC')
         df[time_col] = epoch_base + offsets
     return df
 
@@ -322,7 +379,7 @@ def add_date_partitions(df: pd.DataFrame, time_col: str = "base_date_time") -> p
 
 def make_points(df: pd.DataFrame) -> gpd.GeoDataFrame:
     """Flat AIS DataFrame -> GeoDataFrame with Point geometry and year/month/day columns."""
-    df['base_date_time'] = pd.to_datetime(df['base_date_time'], utc=True, format='ISO8601').dt.tz_localize(None)
+    df['base_date_time'] = to_utc_datetime(df['base_date_time'], format='ISO8601')
 
     # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
     # This generates POINT EMPTY geometries without discarding any raw rows
@@ -643,7 +700,14 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
         client.close()
 
 
-def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
+def run_csv_conversion(
+    input_file: Path,
+    output_file: Path,
+    scheduler: str = None,
+    bbox: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+):
     """
     Convert CSV AIS data (standard or zipped) to standard flat GeoParquet.
     """
@@ -656,18 +720,60 @@ def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
         
     try:
         logger.info(f"Reading CSV from {input_file} using Dask DataFrame...")
-        # Note: # Timestamp has a leading hash sign in standard Danish AIS CSV files.
-        # See specification at: http://aisdata.ais.dk/!_README_information_CSV_files.txt
-        needed_src_cols = [
-            '# Timestamp', 'MMSI', 'Latitude', 'Longitude', 'SOG', 'COG', 
-            'Heading', 'Width', 'Length', 'Draught', 'Navigational status', 'Ship type'
-        ]
-        df = dd.read_csv(
-            input_file,
-            compression="zip" if input_file.suffix == ".zip" else None,
-            blocksize=None if input_file.suffix == ".zip" else "64MB",
-            usecols=needed_src_cols,
-            dtype={
+        # Peek at header to auto-detect CSV flavor (Danish vs NOAA / Marine Cadastre)
+        if input_file.suffix == ".zip":
+            with zipfile.ZipFile(input_file, 'r') as z:
+                first_member = z.namelist()[0]
+                with z.open(first_member) as f:
+                    header_line = f.readline().decode('utf-8', errors='ignore')
+        else:
+            with open(input_file, "r", encoding="utf-8", errors="ignore") as f:
+                header_line = f.readline()
+
+        header_lower = header_line.lower()
+        is_noaa = ("base_date_time" in header_lower) or ("vessel_type" in header_lower)
+
+        if is_noaa:
+            needed_src_cols = [
+                'mmsi', 'base_date_time', 'latitude', 'longitude', 'sog', 'cog',
+                'heading', 'vessel_name', 'imo', 'call_sign', 'vessel_type',
+                'status', 'length', 'width', 'draft', 'cargo'
+            ]
+            dtype_spec = {
+                'mmsi': 'int64',
+                'base_date_time': 'object',
+                'latitude': 'float64',
+                'longitude': 'float64',
+                'sog': 'float64',
+                'cog': 'float64',
+                'heading': 'float64',
+                'status': 'object',
+                'length': 'float64',
+                'width': 'float64',
+                'draft': 'float64',
+                'cargo': 'object',
+                'vessel_name': 'object',
+                'imo': 'object',
+                'call_sign': 'object',
+                'vessel_type': 'object',
+            }
+            rename_map = {
+                'width': 'beam',
+                'draft': 'draught',
+                'vessel_type': 'shiptypeAIS',
+                'vessel_name': 'name',
+                'imo': 'imo',
+                'call_sign': 'callsign',
+                'cargo': 'cargo',
+            }
+            date_format = None
+        else:
+            # Standard Danish AIS CSV files
+            needed_src_cols = [
+                '# Timestamp', 'MMSI', 'Latitude', 'Longitude', 'SOG', 'COG', 
+                'Heading', 'Width', 'Length', 'Draught', 'Navigational status', 'Ship type'
+            ]
+            dtype_spec = {
                 '# Timestamp': 'object',
                 'MMSI': 'int64',
                 'Latitude': 'float64',
@@ -681,32 +787,66 @@ def run_csv_conversion(input_file: Path, output_file: Path, scheduler: str):
                 'Navigational status': 'object',
                 'Ship type': 'object'
             }
+            rename_map = {
+                '# Timestamp': 'base_date_time',
+                'MMSI': 'mmsi',
+                'Latitude': 'latitude',
+                'Longitude': 'longitude',
+                'SOG': 'sog',
+                'COG': 'cog',
+                'Heading': 'heading',
+                'Width': 'beam',
+                'Length': 'length',
+                'Draught': 'draught',
+                'Navigational status': 'status',
+                'Ship type': 'shiptypeAIS'
+            }
+            date_format = "%d/%m/%Y %H:%M:%S"
+
+        df = dd.read_csv(
+            input_file,
+            compression="zip" if input_file.suffix == ".zip" else None,
+            blocksize=None if input_file.suffix == ".zip" else "64MB",
+            usecols=needed_src_cols,
+            dtype=dtype_spec,
         )
         
-        df = df.rename(columns={
-            '# Timestamp': 'base_date_time',
-            'MMSI': 'mmsi',
-            'Latitude': 'latitude',
-            'Longitude': 'longitude',
-            'SOG': 'sog',
-            'COG': 'cog',
-            'Heading': 'heading',
-            'Width': 'beam',
-            'Length': 'length',
-            'Draught': 'draught',
-            'Navigational status': 'status',
-            'Ship type': 'shiptypeAIS'
-        })
+        df = df.rename(columns=rename_map)
         
-        needed_cols = [
-            'mmsi', 'base_date_time', 'longitude', 'latitude', 'cog', 'sog', 
-            'heading', 'beam', 'length', 'draught', 'status', 'shiptypeAIS'
-        ]
+        if is_noaa:
+            needed_cols = [
+                'mmsi', 'base_date_time', 'longitude', 'latitude', 'cog', 'sog', 
+                'heading', 'beam', 'length', 'draught', 'status', 'shiptypeAIS',
+                'name', 'imo', 'callsign', 'cargo'
+            ]
+        else:
+            needed_cols = [
+                'mmsi', 'base_date_time', 'longitude', 'latitude', 'cog', 'sog', 
+                'heading', 'beam', 'length', 'draught', 'status', 'shiptypeAIS'
+            ]
         df = df[needed_cols]
-        
+
+        if bbox:
+            parts = [float(x.strip()) for x in bbox.split(",")]
+            if len(parts) != 4:
+                raise ValueError(f"Invalid bbox format '{bbox}'. Expected 4 comma-separated values: min_lon,min_lat,max_lon,max_lat")
+            min_lon, min_lat, max_lon, max_lat = parts
+            logger.info(f"Filtering coordinates within bounding box [{min_lon}, {min_lat}, {max_lon}, {max_lat}]...")
+            df = df[
+                (df['longitude'] >= min_lon) & (df['longitude'] <= max_lon) &
+                (df['latitude'] >= min_lat) & (df['latitude'] <= max_lat)
+            ]
+
+        if start_time:
+            logger.info(f"Filtering records >= start_time '{start_time}'...")
+            df = df[df['base_date_time'] >= str(start_time)]
+        if end_time:
+            logger.info(f"Filtering records < end_time '{end_time}'...")
+            df = df[df['base_date_time'] < str(end_time)]
+
         logger.info("Converting DataFrame to GeoDataFrame with Point geometry...")
         def make_points(df):
-            df['base_date_time'] = pd.to_datetime(df['base_date_time'], format="%d/%m/%Y %H:%M:%S", errors='coerce')
+            df['base_date_time'] = to_utc_datetime(df['base_date_time'], format=date_format)
             
             # Map standard AIS missing coordinate sentinels (91.0 / 181.0) to NaN
             # This generates POINT EMPTY geometries without discarding any raw rows
@@ -868,10 +1008,18 @@ def run_outlier_filtering(input_file: Path, output_file: Path, v_max: float = No
     logger.info("Outlier filtering complete!")
 
 
-def run_segment_generation(input_file: Path, output_file: Path, sog_raw_units: bool, epoch_time: bool = False, vessel_codes_json: Path = None):
+def run_segment_generation(
+    input_file: Path,
+    output_file: Path,
+    sog_raw_units: bool,
+    epoch_time: bool = False,
+    vessel_codes_json: Path = None,
+    metric_crs: Optional[str] = None,
+    max_segment_duration_s: float = 1800.0,
+):
     """
     Generate point-pair line segments from trajectorized point dataset,
-    with option to use epoch-normalized timestamps.
+    with option to use epoch-normalized timestamps and project to a metric CRS.
     """
     logger.info(f"Loading trajectorized points from {input_file}...")
     gdf = gpd.read_parquet(input_file)
@@ -921,8 +1069,8 @@ def run_segment_generation(input_file: Path, output_file: Path, sog_raw_units: b
         'Length': p1['length'].values if 'length' in p1.columns else np.nan,
         'Width': p1['beam'].values if 'beam' in p1.columns else np.nan,
         'Draft': p1['draught'].values if 'draught' in p1.columns else np.nan,
-        'segment_start_time': p1[time_col].values,
-        'segment_end_time': p2[time_col].values,
+        'segment_start_time': to_utc_datetime(p1[time_col]).values,
+        'segment_end_time': to_utc_datetime(p2[time_col]).values,
         'speed_mps': p1['speed_mps'].values if 'speed_mps' in p1.columns else np.nan,
         'acceleration_mps2': p1['acceleration_mps2'].values if 'acceleration_mps2' in p1.columns else np.nan,
     })
@@ -933,8 +1081,20 @@ def run_segment_generation(input_file: Path, output_file: Path, sog_raw_units: b
     df_segments['sog'] = clean_sog(p1['sog'].values, raw_units=sog_raw_units)
 
     df_segments['segment_duration_s'] = (df_segments['segment_end_time'] - df_segments['segment_start_time']).dt.total_seconds()
+    if max_segment_duration_s is not None:
+        valid_dur = (df_segments['segment_duration_s'] <= max_segment_duration_s) & (df_segments['segment_duration_s'] >= 0)
+        n_dropped = int((~valid_dur).sum())
+        if n_dropped > 0:
+            logger.info(f"Filtered out {n_dropped:,} segments with tracking gaps > {max_segment_duration_s}s.")
+            df_segments = df_segments[valid_dur].reset_index(drop=True)
+            geoms = geoms[valid_dur.values]
+
     gdf_segments = gpd.GeoDataFrame(df_segments, geometry=geoms, crs="EPSG:4326")
     
+    if metric_crs:
+        logger.info(f"Projecting segments to metric CRS ({metric_crs})...")
+        gdf_segments = gdf_segments.to_crs(metric_crs)
+
     output_file.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Saving segments GeoParquet to: {output_file}...")
     gdf_segments.to_parquet(output_file)

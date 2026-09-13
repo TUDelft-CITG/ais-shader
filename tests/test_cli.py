@@ -49,3 +49,21 @@ def test_trajectory_to_segment_help():
     result = runner.invoke(cli, ["trajectory", "to-segment", "--help"])
     assert result.exit_code == 0
     assert "--epoch-time" in result.output
+
+def test_events_help():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["events", "--help"])
+    assert result.exit_code == 0
+    assert "line-crossings" in result.output
+    assert "polygon-entry-exit" in result.output
+    assert "encounters" in result.output
+
+def test_events_encounters_help():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["events", "encounters", "--help"])
+    assert result.exit_code == 0
+    assert "--max-distance" in result.output
+    assert "--time-bin-minutes" in result.output
+    assert "--merge-gap-minutes" in result.output
+    assert "--metric-crs" in result.output
+

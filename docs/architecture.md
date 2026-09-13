@@ -164,6 +164,48 @@ error, just less correct/pretty.
   - `ProfileLength`: Total length of the parent passage line (meters).
   - `BinWidth`: Width of this segment in meters (ProfileLength / 20.0).
 
+### 7. Inland Vessel Encounters
+- **Format**: GeoParquet.
+- **CRS**: `EPSG:4326` (Point geometry at CPA midpoint).
+- **Documentation**: See [Inland Vessel Encounter Methodology](encounter_methodology.md) and diagram in [inland_encounter_workflow.d2](inland_encounter_workflow.d2).
+- **Feature Schema**:
+  - `encounter_id`: Unique identifier per merged encounter event (`int`).
+  - `mmsi_1`, `mmsi_2`: MMSIs of encountering vessels (`str`).
+  - `trip_id_1`, `trip_id_2`: Voyage trip identifiers (`int`/`str`).
+  - `vessel_type_1`, `vessel_type_2`, `vessel_group_1`, `vessel_group_2`: Vessel classification metadata.
+  - `length_1`, `length_2`, `width_1`, `width_2`: Ship dimensions (meters).
+  - `sog_1`, `sog_2`, `speed_mps_1`, `speed_mps_2`: Speeds at CPA (knots and m/s).
+  - `heading_1`, `heading_2`: Course headings (degrees).
+  - `is_stationary_1`, `is_stationary_2`, `stationary_role`: Stationary status and role (`'none'`, `'vessel_1'`, `'vessel_2'`, `'both'`).
+  - `start_time`, `end_time`: Start and end timestamps of the multi-segment encounter window.
+  - `cpa_time`: Exact analytical Closest Point of Approach timestamp.
+  - `min_distance_m`: Minimum distance at CPA (meters).
+  - `encounter_type`: Classification (`'head-on'`, `'overtaking'`, `'parallel_sailing'`, `'crossing'`, `'stationary'`).
+  - `overtaking_mmsi`, `overtaken_mmsi`: Specific vessel assignment during overtaking events.
+  - `fairway_chainage_m`, `fairway_chainage_km`, `fairway_cross_track_m`: Curvilinear Frenet-Serret position along fairway axis.
+
+### 8. Stationary Vessel Catalog (Static Obstacles)
+- **Format**: GeoParquet.
+- **CRS**: Local metric UTM or `EPSG:4326`.
+- **Feature Schema**:
+  - `MMSI`, `trip_id`, `VesselType`, `VesselGroup`, `Length`, `Width`: Identity and dimensions.
+  - `segment_start_time`, `segment_end_time`: Dwell duration.
+  - `chainage_m`, `chainage_km`, `cross_track_m`: Along-fairway dwell stationing.
+  - `geometry`: Dwell location point or segment.
+
+### 9. Dynamic Encounter Time Series
+- **Format**: GeoParquet or GeoJSON.
+- **CRS**: `EPSG:4326`.
+- **Geometry**: 2-point `LineString` connecting Vessel 1 to Vessel 2 at each discrete timestamp.
+- **Feature Schema**:
+  - `encounter_id`, `encounter_type`: Reference encounter attributes.
+  - `mmsi_1`, `mmsi_2`: Vessel identifiers.
+  - `timestamp`: Synchronous observation timestamp.
+  - `distance_m`: Instantaneous metric separation between vessels.
+  - `is_cpa`: Boolean flag (`True` at closest point of approach).
+  - `chainage_m_1`, `chainage_m_2`, `cross_track_m_1`, `cross_track_m_2`: Instantaneous fairway coordinates.
+  - `along_channel_gap_m`: Instantaneous along-fairway separation ($|s_1 - s_2|$).
+
 ## Known Issues & Limitations
 - **Zarr Serialization**: We explicitly disable compression for the `spatial_ref` coordinate to avoid `numpy.int64` serialization warnings in some versions of Xarray/Zarr.
 - **GPKG Performance**: Reading from GeoPackage is significantly slower than Parquet. Always preprocess to Parquet first.

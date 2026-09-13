@@ -163,7 +163,7 @@ requires-dist = [
     { name = "colorcet", specifier = ">=3.1.0" },
     { name = "dask", extras = ["distributed"], specifier = ">=2025.11.0" },
     { name = "dask-geopandas", specifier = ">=0.5.0" },
-    { name = "datashader", git = "https://github.com/SiggyF/datashader?branch=fix-geopandas-line-invariance" },
+    { name = "datashader", git = "https://github.com/holoviz/datashader?branch=main" },
     { name = "geoviews", specifier = ">=1.15.0" },
     { name = "holoviews", specifier = ">=1.22.0" },
     { name = "hvplot", specifier = ">=0.12.1" },
@@ -693,8 +693,8 @@ wheels = [
 
 [[package]]
 name = "datashader"
-version = "0.19.1.post1.dev7+g97e54fb31"
-source = { git = "https://github.com/SiggyF/datashader?branch=fix-geopandas-line-invariance#97e54fb315a54c42eb09e5aa37cf687501310c65" }
+version = "0.19.1.post1.dev9+g4b12977c3"
+source = { git = "https://github.com/holoviz/datashader?branch=main#4b12977c32dcf3837be4b3c92c7262de41648d85" }
 dependencies = [
     { name = "colorcet" },
     { name = "multipledispatch" },

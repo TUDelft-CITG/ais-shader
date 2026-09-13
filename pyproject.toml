@@ -49,7 +49,7 @@ where = ["src"]
 package = true
 
 [tool.uv.sources]
-datashader = { git = "https://github.com/SiggyF/datashader", branch = "fix-geopandas-line-invariance" }
+datashader = { git = "https://github.com/holoviz/datashader", branch = "main" }
 
 [dependency-groups]
 dev = [
