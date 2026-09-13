@@ -855,7 +855,7 @@ def _evaluate_candidates_in_window(
 
 def detect_encounters(
     segments_gdf: gpd.GeoDataFrame,
-    max_distance_m: float = 500.0,
+    max_distance_m: float = 100.0,
     time_bin_minutes: float = 60.0,
     merge_gap_minutes: float = 10.0,
     exclude_stationary: str = 'both',
@@ -1481,7 +1481,7 @@ def extract_stationary_vessels(
 def run_encounter_detection(
     segments_file: Path,
     output_file: Path,
-    max_distance_m: float = 500.0,
+    max_distance_m: float = 100.0,
     time_bin_minutes: float = 60.0,
     merge_gap_minutes: float = 10.0,
     exclude_stationary: str = 'both',

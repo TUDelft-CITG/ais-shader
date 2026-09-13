@@ -70,7 +70,7 @@ uv run ais-shader events encounters "$INPUT_SEGS" \
     --timeseries-step 30.0 \
     --stationary-file "$STATIONARY_PARQUET" \
     --exclude-stationary both \
-    --max-distance 600.0 \
+    --max-distance 100.0 \
     --merge-gap-minutes 10.0
 
 echo "==> Encounter detection completed successfully!"

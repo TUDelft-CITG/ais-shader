@@ -1,5 +1,6 @@
 <!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
-<qgis layerType="Vector" styleCategories="Symbology|Temporal" version="4.2.1-Belém do Pará">
+<qgis layerType="Vector" styleCategories="LayerConfiguration|Symbology|Temporal" version="4.2.1-Belém do Pará">
+  <subsetString>&quot;min_distance_m&quot; &lt;= 100</subsetString>
   <temporal accumulate="0" durationField="encounter_id" durationUnit="min" enabled="1" endExpression="" endField="end_time" fixedDuration="0" limitMode="0" mode="2" startExpression="" startField="start_time">
     <fixedRange>
       <start></start>
@@ -8,12 +9,12 @@
   </temporal>
   <renderer-v2 attr="encounter_type" enableorderby="0" forceraster="0" referencescale="-1" symbollevels="0" type="categorizedSymbol">
     <categories>
-      <category label="crossing" render="true" symbol="0" type="string" uuid="{64a5babc-aaca-4037-b5db-28d9c4c89c26}" value="crossing"/>
-      <category label="head-on" render="true" symbol="1" type="string" uuid="{60c8aef9-2a08-4fe8-99ad-9bbf746f7fa9}" value="head-on"/>
-      <category label="overtaking" render="true" symbol="2" type="string" uuid="{91325d37-905f-404c-a300-75b9fccc4569}" value="overtaking"/>
-      <category label="parallel_sailing" render="true" symbol="3" type="string" uuid="{4f0798cd-e9b3-4cbf-b6ef-2c6370819870}" value="parallel_sailing"/>
-      <category label="stationary" render="true" symbol="4" type="string" uuid="{7a98aa87-64b1-4f1e-ab77-528eb58a0707}" value="stationary"/>
-      <category label="" render="true" symbol="5" type="NULL" uuid="{447db533-dd3f-4c34-a21a-07d8105ba7db}" value="NULL"/>
+      <category label="crossing" render="true" symbol="0" type="string" uuid="{0e358fa9-5f28-4f8d-9def-be7ba11392fe}" value="crossing"/>
+      <category label="head-on" render="true" symbol="1" type="string" uuid="{c74c5214-8e8d-45f3-9097-6f4621c70627}" value="head-on"/>
+      <category label="overtaking" render="true" symbol="2" type="string" uuid="{4839bef5-57f7-42a5-9903-12a2ed4351ce}" value="overtaking"/>
+      <category label="parallel_sailing" render="true" symbol="3" type="string" uuid="{a6ff7840-f311-4e1b-85a9-1d42d70901eb}" value="parallel_sailing"/>
+      <category label="stationary" render="true" symbol="4" type="string" uuid="{ab9adc97-8b67-49d6-9b4d-07e47dedd99a}" value="stationary"/>
+      <category label="" render="true" symbol="5" type="NULL" uuid="{962d5e74-4c20-46ef-af1f-46f21d4b53d0}" value="NULL"/>
     </categories>
     <symbols>
       <symbol alpha="1" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="0" type="marker">
@@ -24,7 +25,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{d881ec9b-d04f-4835-82f4-f6aa67bfa8c4}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{8fdff351-0b38-4a6b-8bcf-cad20da4924f}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
@@ -49,7 +50,13 @@
           <data_defined_properties>
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
-              <Option name="properties"/>
+              <Option name="properties" type="Map">
+                <Option name="opacity" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if(&quot;min_distance_m&quot; &lt;= 100, 1.0, 0.0)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+              </Option>
               <Option name="type" type="QString" value="collection"/>
             </Option>
           </data_defined_properties>
@@ -63,7 +70,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{dfb404f9-2199-4685-9c8c-40ab8141e628}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{42ddfa54-37f0-45f0-a7e4-48896f6aa189}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
@@ -88,7 +95,13 @@
           <data_defined_properties>
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
-              <Option name="properties"/>
+              <Option name="properties" type="Map">
+                <Option name="opacity" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if(&quot;min_distance_m&quot; &lt;= 100, 1.0, 0.0)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+              </Option>
               <Option name="type" type="QString" value="collection"/>
             </Option>
           </data_defined_properties>
@@ -102,7 +115,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{dd52492a-6f21-4837-95db-816d305ee233}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{836afc43-0464-4512-b81a-1cefaf715bce}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
@@ -127,7 +140,13 @@
           <data_defined_properties>
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
-              <Option name="properties"/>
+              <Option name="properties" type="Map">
+                <Option name="opacity" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if(&quot;min_distance_m&quot; &lt;= 100, 1.0, 0.0)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+              </Option>
               <Option name="type" type="QString" value="collection"/>
             </Option>
           </data_defined_properties>
@@ -141,7 +160,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{23dcada3-b5d5-4fb1-b644-0d8916bc5259}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{0de98d72-fdfb-44c6-a058-c6365ce12589}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
@@ -166,7 +185,13 @@
           <data_defined_properties>
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
-              <Option name="properties"/>
+              <Option name="properties" type="Map">
+                <Option name="opacity" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if(&quot;min_distance_m&quot; &lt;= 100, 1.0, 0.0)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+              </Option>
               <Option name="type" type="QString" value="collection"/>
             </Option>
           </data_defined_properties>
@@ -180,7 +205,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{879589e1-b0ab-4af3-bb89-3958d1222794}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{cad167c9-c49d-4fa3-a7d3-b4a53ab4b9b1}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
@@ -205,7 +230,13 @@
           <data_defined_properties>
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
-              <Option name="properties"/>
+              <Option name="properties" type="Map">
+                <Option name="opacity" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if(&quot;min_distance_m&quot; &lt;= 100, 1.0, 0.0)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+              </Option>
               <Option name="type" type="QString" value="collection"/>
             </Option>
           </data_defined_properties>
@@ -219,7 +250,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{3cbf4158-74e7-4a89-9ab8-b58f884f4ada}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{7188e1f9-28a7-42a2-812c-9c9c6f35e804}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
@@ -244,7 +275,13 @@
           <data_defined_properties>
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
-              <Option name="properties"/>
+              <Option name="properties" type="Map">
+                <Option name="opacity" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if(&quot;min_distance_m&quot; &lt;= 100, 1.0, 0.0)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+              </Option>
               <Option name="type" type="QString" value="collection"/>
             </Option>
           </data_defined_properties>

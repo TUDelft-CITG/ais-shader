@@ -677,8 +677,8 @@ def polygon_entry_exit(input_file, polygons_file, polygon_id_col, merge_gap_minu
 @click.option(
     "--max-distance",
     type=float,
-    default=500.0,
-    help="Maximum distance in meters between vessels at closest approach (default: 500m).",
+    default=100.0,
+    help="Maximum distance in meters between vessels at closest approach (default: 100m).",
 )
 @click.option(
     "--time-bin-minutes",

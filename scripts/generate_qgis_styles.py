@@ -155,7 +155,13 @@ def make_encounters_qml():
           <data_defined_properties>
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
-              <Option name="properties"/>
+              <Option name="properties" type="Map">
+                <Option name="opacity" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if(&quot;min_distance_m&quot; &lt;= 100, 1.0, 0.0)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+              </Option>
               <Option name="type" type="QString" value="collection"/>
             </Option>
           </data_defined_properties>
@@ -165,7 +171,8 @@ def make_encounters_qml():
     cat_str = "\n".join(categories_xml)
     sym_str = "\n".join(symbols_xml)
     return f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
-<qgis layerType="Vector" styleCategories="Symbology|Temporal" version="4.2.1-Belém do Pará">
+<qgis layerType="Vector" styleCategories="LayerConfiguration|Symbology|Temporal" version="4.2.1-Belém do Pará">
+  <subsetString>&quot;min_distance_m&quot; &lt;= 100</subsetString>
   <temporal accumulate="0" durationField="encounter_id" durationUnit="min" enabled="1" endExpression="" endField="end_time" fixedDuration="0" limitMode="0" mode="2" startExpression="" startField="start_time">
     <fixedRange>
       <start></start>
@@ -253,7 +260,13 @@ def make_timeseries_qml():
           <data_defined_properties>
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
-              <Option name="properties"/>
+              <Option name="properties" type="Map">
+                <Option name="opacity" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="if(&quot;distance_m&quot; &lt;= 100, 1.0, 0.0)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+              </Option>
               <Option name="type" type="QString" value="collection"/>
             </Option>
           </data_defined_properties>
@@ -263,7 +276,8 @@ def make_timeseries_qml():
     cat_str = "\n".join(categories_xml)
     sym_str = "\n".join(symbols_xml)
     return f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
-<qgis layerType="Vector" styleCategories="Symbology|Temporal" version="4.2.1-Belém do Pará">
+<qgis layerType="Vector" styleCategories="LayerConfiguration|Symbology|Temporal" version="4.2.1-Belém do Pará">
+  <subsetString>&quot;distance_m&quot; &lt;= 100</subsetString>
   <temporal accumulate="0" durationField="distance_m" durationUnit="min" enabled="1" endExpression="" endField="" fixedDuration="30" limitMode="0" mode="1" startExpression="" startField="timestamp">
     <fixedRange>
       <start></start>

@@ -41,7 +41,15 @@
   * `endExpression="\"segment_end_time\" + make_interval(minutes:=15)"`
   * Prevents QGIS `second()` extraction issues (which only returned 0-59 seconds rather than interval duration).
 
-### F. Generated Complete Artifact Suites (EPSG:4326 GeoParquet & GeoJSON)
+### F. Standard ~100m Distance & Min-Distance Filtering
+* **Rationale**: In inland waterways, close encounters, overtakings, and head-on passes occur within $\approx 100\text{ m}$. A 500–600m threshold captures non-interacting traffic across opposite banks or distant bayous.
+* **CLI & Pipeline Defaults**: Changed default `--max-distance` in [`src/ais_shader/cli.py`](file:///home/fbaart/src/ais-shader/src/ais_shader/cli.py) and [`src/ais_shader/events.py`](file:///home/fbaart/src/ais-shader/src/ais_shader/events.py) from `500.0` to `100.0` meters.
+* **QGIS Layer & Symbology Filtering**:
+  * In [`docs/styles/encounters.qml`](file:///home/fbaart/src/ais-shader/docs/styles/encounters.qml): added provider `<subsetString>&quot;min_distance_m&quot; &lt;= 100</subsetString>` and data-defined opacity rule `if("min_distance_m" <= 100, 1.0, 0.0)`.
+  * In [`docs/styles/timeseries.qml`](file:///home/fbaart/src/ais-shader/docs/styles/timeseries.qml): added provider `<subsetString>&quot;distance_m&quot; &lt;= 100</subsetString>` and data-defined opacity rule `if("distance_m" <= 100, 1.0, 0.0)`.
+  * Both styles immediately focus on the 900 true inland encounters and 4,128 close connecting lines.
+
+### G. Generated Complete Artifact Suites (EPSG:4326 GeoParquet & GeoJSON)
 
 #### 1. Mississippi 1-Hour Corridor (`/scratch-shared/fbaart/data/mississippi_1h/`):
 * `mississippi_fairway_centerline.geoparquet` (250 KB) & `.geojson` (673 KB): Continuous B-spline fairway centerline (`EPSG:4326`).
