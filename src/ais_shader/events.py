@@ -1055,6 +1055,7 @@ def _generate_encounter_timeseries_chunk(
     fairway_axis: Optional[FairwayAxis] = None,
     metric_crs: str = "EPSG:3857",
     segments_crs: str = "EPSG:4326",
+    max_distance_m: Optional[float] = None,
 ) -> gpd.GeoDataFrame:
     """Generate timeseries connecting lines for a chunk of encounters."""
     empty_cols = TIMESERIES_COLS.copy()
@@ -1146,13 +1147,18 @@ def _generate_encounter_timeseries_chunk(
             s1, s2, ct1, ct2, along_gap = None, None, None, None, None
 
         for k in range(len(sub_grid)):
+            d_val = float(dist_m[k])
+            # Drop connecting lines that exceed max encounter distance (unless it is the CPA point itself)
+            if max_distance_m is not None and d_val > max_distance_m and not is_cpa_arr[k]:
+                continue
+
             rec = {
                 'encounter_id': enc_id,
                 'encounter_type': enc_type,
                 'mmsi_1': mmsi_1,
                 'mmsi_2': mmsi_2,
                 'timestamp': sub_grid[k],
-                'distance_m': round(float(dist_m[k]), 2),
+                'distance_m': round(d_val, 2),
                 'is_cpa': bool(is_cpa_arr[k]),
             }
             if fairway_axis is not None:
@@ -1179,6 +1185,7 @@ def generate_encounter_timeseries(
     max_gap_seconds: float = 600.0,
     metric_crs: Optional[str] = None,
     client: Optional[Client] = None,
+    max_distance_m: Optional[float] = None,
 ) -> gpd.GeoDataFrame:
     """
     Generate dynamic time series of connecting lines between encountering vessels.
@@ -1220,7 +1227,7 @@ def generate_encounter_timeseries(
         scattered_lookup = client.scatter(lookup, broadcast=True)
         tasks = [
             dask.delayed(_generate_encounter_timeseries_chunk)(
-                chunk, scattered_lookup, step_seconds, fairway_axis, metric_crs, segments_crs
+                chunk, scattered_lookup, step_seconds, fairway_axis, metric_crs, segments_crs, max_distance_m
             )
             for chunk in enc_chunks
         ]
@@ -1231,7 +1238,7 @@ def generate_encounter_timeseries(
         return pd.concat(valid_results, ignore_index=True)
 
     return _generate_encounter_timeseries_chunk(
-        encounters_gdf, lookup, step_seconds=step_seconds, fairway_axis=fairway_axis, metric_crs=metric_crs, segments_crs=segments_crs
+        encounters_gdf, lookup, step_seconds=step_seconds, fairway_axis=fairway_axis, metric_crs=metric_crs, segments_crs=segments_crs, max_distance_m=max_distance_m
     )
 
 
@@ -1362,6 +1369,7 @@ def run_encounter_detection(
             fairway_axis=axis_obj,
             metric_crs=metric_crs,
             client=client,
+            max_distance_m=max_distance_m,
         )
         logger.info(f"Generated {len(ts_gdf):,} time series connecting lines.")
         timeseries_file.parent.mkdir(parents=True, exist_ok=True)
