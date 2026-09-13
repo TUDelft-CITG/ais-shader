@@ -74,6 +74,9 @@ uv run ais-shader events encounters "$INPUT_SEGS" \
     --merge-gap-minutes 10.0
 
 echo "==> Encounter detection completed successfully!"
+echo "==> Synchronizing QGIS styles..."
+uv run python scripts/generate_qgis_styles.py
+
 echo "==> Output artifacts:"
 ls -lh "$OUTPUT_DIR"
 echo "==> End time: $(date -u '+%Y-%m-%d %H:%M:%SZ')"

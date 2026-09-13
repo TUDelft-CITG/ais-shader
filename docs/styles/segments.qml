@@ -8,15 +8,15 @@
   </temporal>
   <renderer-v2 attr="VesselGroup" enableorderby="0" forceraster="0" referencescale="-1" symbollevels="1" type="categorizedSymbol">
     <categories>
-      <category label="Cargo" render="true" symbol="0" type="string" uuid="{91105074-2db2-4214-b360-831ac5c3f064}" value="Cargo"/>
-      <category label="Tanker" render="true" symbol="1" type="string" uuid="{6cb8e9a7-a7fa-49cf-ab36-364a3c89f10e}" value="Tanker"/>
-      <category label="Tug" render="true" symbol="2" type="string" uuid="{0812f713-950e-4127-8d93-0b124357e28e}" value="Tug"/>
-      <category label="Passenger" render="true" symbol="3" type="string" uuid="{0490f6d6-4b9b-46c4-a197-5c91c0bb91a3}" value="Passenger"/>
-      <category label="Pleasure Craft/Sailing" render="true" symbol="4" type="string" uuid="{a44ad263-c4f6-48ff-97ce-d2ebd7424617}" value="Pleasure Craft/Sailing"/>
-      <category label="Fishing" render="true" symbol="5" type="string" uuid="{3b301601-7bdd-4a12-babd-1546f80d2e83}" value="Fishing"/>
-      <category label="Military" render="true" symbol="6" type="string" uuid="{8b770f5e-04ae-4c83-b591-0933b6e4f794}" value="Military"/>
-      <category label="Other" render="true" symbol="7" type="string" uuid="{b659be50-aa53-4b2a-9c7e-5604cce1f5ba}" value="Other"/>
-      <category label="" render="true" symbol="8" type="NULL" uuid="{404038a9-b88e-44ba-b177-48bd40d55248}" value="NULL"/>
+      <category label="Cargo" render="true" symbol="0" type="string" uuid="{d4ccce2a-00d0-4759-9a82-daea12100ba3}" value="Cargo"/>
+      <category label="Tanker" render="true" symbol="1" type="string" uuid="{88098d55-7e9c-4d2f-a938-00bbc87217ee}" value="Tanker"/>
+      <category label="Tug" render="true" symbol="2" type="string" uuid="{41afefeb-af6f-47be-b95b-5868e82bd9b4}" value="Tug"/>
+      <category label="Passenger" render="true" symbol="3" type="string" uuid="{fa67513e-ee3a-4288-b09e-e7f619e99e16}" value="Passenger"/>
+      <category label="Pleasure Craft/Sailing" render="true" symbol="4" type="string" uuid="{c59b8d72-15a9-48ee-8702-4aeca4096472}" value="Pleasure Craft/Sailing"/>
+      <category label="Fishing" render="true" symbol="5" type="string" uuid="{7ba015ba-09ee-4438-a204-2f5e556d1c9d}" value="Fishing"/>
+      <category label="Military" render="true" symbol="6" type="string" uuid="{7d07c2cb-d275-4621-9e1e-65fd89b56aef}" value="Military"/>
+      <category label="Other" render="true" symbol="7" type="string" uuid="{fabfdb43-0858-40db-b80f-9acec3d4880e}" value="Other"/>
+      <category label="" render="true" symbol="8" type="NULL" uuid="{6f3b3150-472e-49d6-99a7-9fc5ebdaf8cc}" value="NULL"/>
     </categories>
     <symbols>
       <symbol alpha="1" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="0" type="line">
@@ -34,7 +34,7 @@
           </Option>
         </data_defined_properties>
         <!-- Subtle white outline casing, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{133fbaa6-0dc4-4a53-95d6-b33304bfa56e}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{94304754-31cd-40df-975e-4a070a6ad796}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -76,7 +76,7 @@
           </data_defined_properties>
         </layer>
         <!-- High saturation line, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{0d33b08a-13c8-46bb-8d4c-c5c1cec8bdc5}" locked="0" pass="1">
+        <layer class="SimpleLine" enabled="1" id="{42a10396-cd8a-40dd-a37e-fc577b130ff9}" locked="0" pass="1">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -133,7 +133,7 @@
           </Option>
         </data_defined_properties>
         <!-- Subtle white outline casing, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{f52b5e3a-e538-40f1-9eb9-c5c06a53a41e}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{f01452ec-61a9-4a27-8cc6-32af08cb8237}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -175,7 +175,7 @@
           </data_defined_properties>
         </layer>
         <!-- High saturation line, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{e30a6416-73b0-4ce7-96cd-998745a60af2}" locked="0" pass="1">
+        <layer class="SimpleLine" enabled="1" id="{15989965-9c75-425c-be31-fba56edfb5dd}" locked="0" pass="1">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -232,7 +232,7 @@
           </Option>
         </data_defined_properties>
         <!-- Subtle white outline casing, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{5c97cfce-2301-45a7-b58e-08277e567830}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{962b52eb-90a6-4f91-80fa-3f0934241371}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -274,7 +274,7 @@
           </data_defined_properties>
         </layer>
         <!-- High saturation line, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{e03a4d5d-0868-4178-9e8d-f2ddc09ec4ab}" locked="0" pass="1">
+        <layer class="SimpleLine" enabled="1" id="{e9111608-7b55-4b97-8303-0f6827f7c3a4}" locked="0" pass="1">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -331,7 +331,7 @@
           </Option>
         </data_defined_properties>
         <!-- Subtle white outline casing, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{75a83e8d-a2e4-48be-832d-28d5b3b15128}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{6652ec54-feca-4589-8847-459916949572}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -373,7 +373,7 @@
           </data_defined_properties>
         </layer>
         <!-- High saturation line, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{25a3df96-407d-4809-b29d-31d3aee9754a}" locked="0" pass="1">
+        <layer class="SimpleLine" enabled="1" id="{d2dc1258-0b64-4cc2-b988-934770a130f5}" locked="0" pass="1">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -430,7 +430,7 @@
           </Option>
         </data_defined_properties>
         <!-- Subtle white outline casing, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{8641aebc-50fe-4345-83fd-77a95d11153c}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{7d288890-2336-488d-a080-9ef6e9347ef9}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -472,7 +472,7 @@
           </data_defined_properties>
         </layer>
         <!-- High saturation line, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{fd7babe5-8af4-49ec-a619-b0228387ccb7}" locked="0" pass="1">
+        <layer class="SimpleLine" enabled="1" id="{c0a9c06e-df87-4863-a9ab-4b4166c82ad7}" locked="0" pass="1">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -529,7 +529,7 @@
           </Option>
         </data_defined_properties>
         <!-- Subtle white outline casing, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{27efdcb9-78f3-4406-b6cd-d3c8f4b29615}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{8fcc2107-2004-47ba-bcd9-913c560f63b7}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -571,7 +571,7 @@
           </data_defined_properties>
         </layer>
         <!-- High saturation line, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{a5314520-26cb-4c32-80e7-da958b2763fe}" locked="0" pass="1">
+        <layer class="SimpleLine" enabled="1" id="{4e663a08-c9e4-444d-8b18-728cc866637f}" locked="0" pass="1">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -628,7 +628,7 @@
           </Option>
         </data_defined_properties>
         <!-- Subtle white outline casing, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{6b866e74-216f-46b6-9cf1-a87b39973bef}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{6cb0c75b-c26b-406a-bfff-666031497b84}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -670,7 +670,7 @@
           </data_defined_properties>
         </layer>
         <!-- High saturation line, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{f9d322c7-cf92-48cc-91df-9369f6b45689}" locked="0" pass="1">
+        <layer class="SimpleLine" enabled="1" id="{43c2c64a-9528-4751-8a7f-cc481b8b5db1}" locked="0" pass="1">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -727,7 +727,7 @@
           </Option>
         </data_defined_properties>
         <!-- Subtle white outline casing, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{b11a98b7-83f5-47dc-b17a-dcc9a83ec75d}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{6fea278c-2262-48be-8aa0-d2415dd2c78b}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -769,7 +769,7 @@
           </data_defined_properties>
         </layer>
         <!-- High saturation line, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{0a651ede-f2f3-4442-8df9-23c0fc27a48b}" locked="0" pass="1">
+        <layer class="SimpleLine" enabled="1" id="{a64cae34-b355-4854-b332-edca8d201804}" locked="0" pass="1">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -826,7 +826,7 @@
           </Option>
         </data_defined_properties>
         <!-- Subtle white outline casing, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{746fc1f1-b338-4aa2-adbb-ee10e2b65ef4}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{cebe744e-e5e7-4946-8d80-bf281f1f6bb6}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>
@@ -868,7 +868,7 @@
           </data_defined_properties>
         </layer>
         <!-- High saturation line, tapering as age increases -->
-        <layer class="SimpleLine" enabled="1" id="{38100584-92f3-416a-baef-93357516eb52}" locked="0" pass="1">
+        <layer class="SimpleLine" enabled="1" id="{24ff8372-9c0b-4e24-b602-3e9c86a216fb}" locked="0" pass="1">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="round"/>

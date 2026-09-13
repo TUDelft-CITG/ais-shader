@@ -11,7 +11,7 @@
           </Option>
         </data_defined_properties>
         <!-- Subtle white halo casing -->
-        <layer class="SimpleLine" enabled="1" id="{89a40d1b-77f1-48f6-93b5-a25b0824d79f}" locked="0" pass="0">
+        <layer class="SimpleLine" enabled="1" id="{a84b2eb5-1c23-4f9b-9994-4b2f2aa36619}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="flat"/>
@@ -47,7 +47,7 @@
           </data_defined_properties>
         </layer>
         <!-- Deep nautical teal dashed fairway line -->
-        <layer class="SimpleLine" enabled="1" id="{d14d0a8a-5417-444f-bf20-09c204045a93}" locked="0" pass="1">
+        <layer class="SimpleLine" enabled="1" id="{bb783f28-47f4-44a6-8d54-155e749c4cc6}" locked="0" pass="1">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
             <Option name="capstyle" type="QString" value="flat"/>

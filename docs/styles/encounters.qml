@@ -8,12 +8,12 @@
   </temporal>
   <renderer-v2 attr="encounter_type" enableorderby="0" forceraster="0" referencescale="-1" symbollevels="0" type="categorizedSymbol">
     <categories>
-      <category label="crossing" render="true" symbol="0" type="string" uuid="{b0a73e07-9f5a-4df2-bc19-e446b8bfd8bf}" value="crossing"/>
-      <category label="head-on" render="true" symbol="1" type="string" uuid="{79926d8d-a03d-4f3f-9425-1172b1f764cf}" value="head-on"/>
-      <category label="overtaking" render="true" symbol="2" type="string" uuid="{d761cfae-7cd3-41bc-b1ec-4690a12c62ba}" value="overtaking"/>
-      <category label="parallel_sailing" render="true" symbol="3" type="string" uuid="{b794e553-7bdf-405e-95d7-dfdfd00d41e0}" value="parallel_sailing"/>
-      <category label="stationary" render="true" symbol="4" type="string" uuid="{868341b3-cd7c-400c-b09c-b2feb06fcbb4}" value="stationary"/>
-      <category label="" render="true" symbol="5" type="NULL" uuid="{df76ed5c-43bc-4915-a8cf-583d31c1e6af}" value="NULL"/>
+      <category label="crossing" render="true" symbol="0" type="string" uuid="{e25a2c1f-4236-4535-93a3-46e192af1802}" value="crossing"/>
+      <category label="head-on" render="true" symbol="1" type="string" uuid="{644e3684-74ee-493f-aab5-61cc01a6824e}" value="head-on"/>
+      <category label="overtaking" render="true" symbol="2" type="string" uuid="{0e01355e-1da4-41a5-ba3c-02b68993cad7}" value="overtaking"/>
+      <category label="parallel_sailing" render="true" symbol="3" type="string" uuid="{512b2624-c484-4b04-90e4-5b25fd3da85d}" value="parallel_sailing"/>
+      <category label="stationary" render="true" symbol="4" type="string" uuid="{0b34e14c-eda5-4d0f-9052-4e9fcf8440cd}" value="stationary"/>
+      <category label="" render="true" symbol="5" type="NULL" uuid="{8bb9af3f-fb58-4599-a5ba-d46fc39b9311}" value="NULL"/>
     </categories>
     <symbols>
       <symbol alpha="1" clip_to_extent="1" force_rhr="0" frame_rate="10" is_animated="0" name="0" type="marker">
@@ -24,7 +24,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{304ace03-9243-42ef-b5c9-34e79e521aa9}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{78e5bd9e-9d6d-4f9b-b4e8-090b49328720}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
@@ -63,7 +63,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{d3b66899-af2b-4a08-a45a-033aca790386}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{ece5ece5-d5fd-4efb-a45f-00b1ae8198df}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
@@ -102,7 +102,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{99a2f790-de75-4a58-b136-8400f83ce594}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{9bdaa29e-226c-4e27-b963-40c5d5582b38}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
@@ -141,7 +141,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{86202e83-1783-458b-8f62-8cad6567f713}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{1f8f49db-7a3d-44d3-8517-0b6791e054a1}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
@@ -180,7 +180,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{94c5868a-6acd-4519-80d8-5d3dca376124}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{8760f1da-f010-487b-a8d7-1ecdcd4e15bd}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
@@ -219,7 +219,7 @@
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <layer class="SimpleMarker" enabled="1" id="{4ecb5149-ee82-44a3-8f27-66c963300ea9}" locked="0" pass="0">
+        <layer class="SimpleMarker" enabled="1" id="{54872f00-a031-481c-8dcd-1dc43b658adb}" locked="0" pass="0">
           <Option type="Map">
             <Option name="angle" type="QString" value="0"/>
             <Option name="cap_style" type="QString" value="square"/>
