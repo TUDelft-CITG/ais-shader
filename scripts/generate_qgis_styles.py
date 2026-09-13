@@ -475,7 +475,7 @@ def make_vesselgroup_line_qml(layer_type_name, start_field, end_field, line_widt
 # LineString segments with 15min trailing tail temporal expression,
 # categorized by VesselGroup with subtle white casing.
 # ---------------------------------------------------------------------------
-def make_segments_qml(line_width=0.40, casing_width=0.80):
+def make_segments_qml():
     categories_xml = []
     symbols_xml = []
     for idx, (label, color_val) in enumerate(VESSEL_GROUPS):
@@ -487,11 +487,17 @@ def make_segments_qml(line_width=0.40, casing_width=0.80):
         <data_defined_properties>
           <Option type="Map">
             <Option name="name" type="QString" value=""/>
-            <Option name="properties"/>
+            <Option name="properties" type="Map">
+              <Option name="alpha" type="Map">
+                <Option name="active" type="bool" value="true"/>
+                <Option name="expression" type="QString" value="scale_linear(clamp(0, coalesce(epoch(@map_end_time) - epoch(&quot;segment_end_time&quot;), 0), 900), 0, 900, 1.0, 0.20)"/>
+                <Option name="type" type="int" value="3"/>
+              </Option>
+            </Option>
             <Option name="type" type="QString" value="collection"/>
           </Option>
         </data_defined_properties>
-        <!-- Subtle thin white outline casing -->
+        <!-- Subtle white outline casing, tapering as age increases -->
         <layer class="SimpleLine" enabled="1" id="{uid()}" locked="0" pass="0">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
@@ -503,7 +509,7 @@ def make_segments_qml(line_width=0.40, casing_width=0.80):
             <Option name="joinstyle" type="QString" value="round"/>
             <Option name="line_color" type="QString" value="255,255,255,210,rgb:1,1,1,0.82352941"/>
             <Option name="line_style" type="QString" value="solid"/>
-            <Option name="line_width" type="QString" value="{casing_width}"/>
+            <Option name="line_width" type="QString" value="0.95"/>
             <Option name="line_width_unit" type="QString" value="MM"/>
             <Option name="offset" type="QString" value="0"/>
             <Option name="offset_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
@@ -522,12 +528,18 @@ def make_segments_qml(line_width=0.40, casing_width=0.80):
           <data_defined_properties>
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
-              <Option name="properties"/>
+              <Option name="properties" type="Map">
+                <Option name="outlineWidth" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="scale_linear(clamp(0, coalesce(epoch(@map_end_time) - epoch(&quot;segment_end_time&quot;), 0), 900), 0, 900, 0.95, 0.30)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+              </Option>
               <Option name="type" type="QString" value="collection"/>
             </Option>
           </data_defined_properties>
         </layer>
-        <!-- High saturation line -->
+        <!-- High saturation line, tapering as age increases -->
         <layer class="SimpleLine" enabled="1" id="{uid()}" locked="0" pass="1">
           <Option type="Map">
             <Option name="align_dash_pattern" type="QString" value="0"/>
@@ -539,7 +551,7 @@ def make_segments_qml(line_width=0.40, casing_width=0.80):
             <Option name="joinstyle" type="QString" value="round"/>
             <Option name="line_color" type="QString" value="{color_val}"/>
             <Option name="line_style" type="QString" value="solid"/>
-            <Option name="line_width" type="QString" value="{line_width}"/>
+            <Option name="line_width" type="QString" value="0.55"/>
             <Option name="line_width_unit" type="QString" value="MM"/>
             <Option name="offset" type="QString" value="0"/>
             <Option name="offset_map_unit_scale" type="QString" value="3x:0,0,0,0,0,0"/>
@@ -558,7 +570,13 @@ def make_segments_qml(line_width=0.40, casing_width=0.80):
           <data_defined_properties>
             <Option type="Map">
               <Option name="name" type="QString" value=""/>
-              <Option name="properties"/>
+              <Option name="properties" type="Map">
+                <Option name="outlineWidth" type="Map">
+                  <Option name="active" type="bool" value="true"/>
+                  <Option name="expression" type="QString" value="scale_linear(clamp(0, coalesce(epoch(@map_end_time) - epoch(&quot;segment_end_time&quot;), 0), 900), 0, 900, 0.55, 0.12)"/>
+                  <Option name="type" type="int" value="3"/>
+                </Option>
+              </Option>
               <Option name="type" type="QString" value="collection"/>
             </Option>
           </data_defined_properties>
@@ -569,7 +587,7 @@ def make_segments_qml(line_width=0.40, casing_width=0.80):
     sym_str = "\n".join(symbols_xml)
     return f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
 <qgis layerType="Vector" styleCategories="Symbology|Temporal" version="4.2.1-Belém do Pará">
-  <temporal accumulate="1" durationField="MMSI" durationUnit="min" enabled="1" endExpression="segment_end_time" endField="segment_end_time" fixedDuration="0" limitMode="0" mode="4" startExpression="&quot;segment_end_time&quot; - make_interval(seconds:= &#xa;&#x9;min(&#xa;&#x9;&#x9;second(make_interval( minutes:=15)), &#xa;&#x9;&#x9;second(&quot;segment_end_time&quot; - &quot;segment_start_time&quot;)&#xa;&#x9;)&#xa;)" startField="segment_start_time">
+  <temporal accumulate="0" durationField="MMSI" durationUnit="min" enabled="1" endExpression="&quot;segment_end_time&quot; + make_interval(minutes:=15)" endField="segment_end_time" fixedDuration="0" limitMode="0" mode="4" startExpression="" startField="segment_start_time">
     <fixedRange>
       <start></start>
       <end></end>
@@ -794,7 +812,7 @@ def main():
         "encounters.qml": make_encounters_qml(),
         "timeseries.qml": make_timeseries_qml(),
         "trajectories.qml": make_vesselgroup_line_qml("trajectories", "TrackStartTime", "TrackEndTime", line_width=0.45, casing_width=0.85),
-        "segments.qml": make_segments_qml(line_width=0.40, casing_width=0.80),
+        "segments.qml": make_segments_qml(),
         "stationary.qml": make_vesselgroup_line_qml("stationary", "segment_start_time", "segment_end_time", line_width=0.55, casing_width=0.95),
         "fairway_centerline.qml": FAIRWAY_CENTERLINE_QML,
         "fairway_mile_markers.qml": FAIRWAY_MILE_MARKERS_QML,
