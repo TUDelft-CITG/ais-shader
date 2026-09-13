@@ -1233,8 +1233,8 @@ def _generate_encounter_timeseries_chunk(
 
         for k in range(len(sub_grid)):
             d_val = float(dist_m[k])
-            # Drop connecting lines that exceed max encounter distance (unless it is the CPA point itself)
-            if max_distance_m is not None and d_val > max_distance_m and not is_cpa_arr[k]:
+            # Drop connecting lines that exceed max encounter distance
+            if max_distance_m is not None and d_val > max_distance_m:
                 continue
 
             rec = {
