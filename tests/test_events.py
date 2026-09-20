@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString, Polygon
 from ais_shader.events import (
+    check_abaft_the_beam,
     detect_line_crossings,
     detect_polygon_entry_exit,
     detect_encounters,
@@ -143,11 +144,40 @@ def test_detect_polygon_entry_exit_merge_gap():
     assert abs(e2['exit_time'] - pd.Timestamp('2026-06-14 10:46:00')) < pd.Timedelta(seconds=1)
 
 
+def test_check_abaft_the_beam():
+    import numpy as np
+    # Vessel 1 heading North (0 deg) at (0, 100)
+    p_fwd = np.array([0.0, 100.0])
+
+    # 1. Dead astern at (0, 0): dev 0 deg, abaft 90 deg -> True
+    is_ab, deg = check_abaft_the_beam(p_fwd, 0.0, np.array([0.0, 0.0]))
+    assert is_ab is True
+    assert abs(deg - 90.0) < 1e-4
+
+    # 2. 30 deg abaft starboard beam (bearing 120 deg): dev 60 deg -> True
+    p_30_abaft = np.array([np.sin(np.radians(120)), 100.0 + np.cos(np.radians(120))])
+    is_ab, deg = check_abaft_the_beam(p_fwd, 0.0, p_30_abaft)
+    assert is_ab is True
+    assert abs(deg - 30.0) < 1e-4
+
+    # 3. Directly abeam at (100, 100): dev 90 deg, abaft 0 deg -> False
+    is_ab, deg = check_abaft_the_beam(p_fwd, 0.0, np.array([100.0, 100.0]))
+    assert is_ab is False
+    assert abs(deg - 0.0) < 1e-4
+
+    # 4. Ahead at (0, 200): dev 180 deg, abaft -90 deg -> False
+    is_ab, deg = check_abaft_the_beam(p_fwd, 0.0, np.array([0.0, 200.0]))
+    assert is_ab is False
+    assert abs(deg - (-90.0)) < 1e-4
+
+
 def test_classify_encounter():
     assert classify_encounter(0.0, 180.0) == 'head-on'
     assert classify_encounter(10.0, 170.0) == 'head-on'
     assert classify_encounter(90.0, 95.0) == 'overtaking'
     assert classify_encounter(5.0, 355.0) == 'overtaking'
+    assert classify_encounter(90.0, 95.0, is_abaft=True) == 'overtaking'
+    assert classify_encounter(90.0, 95.0, is_abaft=False) == 'crossing'
     assert classify_encounter(0.0, 90.0) == 'crossing'
     assert classify_encounter(45.0, 135.0) == 'crossing'
     assert classify_encounter(0.0, 0.0, speed1=0.1, speed2=0.1) == 'stationary'
@@ -213,7 +243,28 @@ def test_detect_encounters_overtaking():
     assert enc['encounter_type'] == 'overtaking'
     assert enc['overtaking_mmsi'] == '111'
     assert enc['overtaken_mmsi'] == '222'
+    assert bool(enc['is_abaft_beam']) is True
+    assert enc['abaft_beam_deg'] > 22.5
     assert enc['min_distance_m'] < 200.0
+
+
+def test_detect_encounters_bpr_not_overtaking_when_not_abaft_beam():
+    # Ship 1 faster, but starts abeam of Ship 2 at a converging angle (crossing, not overtaking)
+    # Both moving in the same general direction (< 45 deg rel_angle), but Ship 1 approaches from beam
+    segments_gdf = gpd.GeoDataFrame(
+        [
+            _make_segment('111', 'ship1', (0.001, 50.005), (0.0001, 50.018), '2026-06-14 12:00:00', 600, sog=20.0),
+            _make_segment('222', 'ship2', (0.0, 50.005), (0.0, 50.015), '2026-06-14 12:00:00', 600, sog=10.0),
+        ],
+        crs="EPSG:4326"
+    )
+
+    encounters = detect_encounters(segments_gdf, max_distance_m=500.0)
+    assert len(encounters) == 1
+    enc = encounters.iloc[0]
+    assert enc['encounter_type'] == 'crossing'
+    assert bool(enc['is_abaft_beam']) is False
+
 
 
 def test_detect_encounters_parallel_sailing():
