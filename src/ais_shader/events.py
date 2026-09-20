@@ -451,13 +451,15 @@ def check_abaft_the_beam(
 ) -> tuple[bool, float]:
     """Check whether p_overtaking approaches p_forward from > 22°30' abaft the beam.
 
-    Juridical Context (BPR BWBR0003628 art. 6.01 & COLREGS Rule 13):
-        - BPR art. 6.01 onder b («oplopen»): 'naderen door een schip van een ander schip
-          uit een richting van meer dan 22°30´ achterlijker dan dwars van dat schip'.
-        - BPR art. 6.01 onder c («voorbijlopen»): 'manoeuvre die het gevolg is van oplopen
-          totdat de schepen geheel vrij van elkaar zijn'.
-        - COLREGS Voorschrift 13(b) hanteert dezelfde geometrische definitie: nadering uit
-          een richting van meer dan 22°30' (22.5°) achterlijker dan dwars (de 135° heklichtsector).
+    Regulatory Context (BPR art. 6.01 & COLREGS Rule 13):
+        - BPR (Inland Navigation Police Regulations) art. 6.01(b) ("oplopen"):
+          approaching of a vessel by another vessel from a direction more than
+          22°30' abaft the beam of that vessel.
+        - BPR art. 6.01(c) ("voorbijlopen"): maneuver resulting from overtaking
+          until the vessels are entirely clear of each other.
+        - COLREGS Rule 13(b) uses the identical geometric definition: approaching
+          from a direction more than 22.5° (22°30') abaft her beam (the 135° sternlight
+          sector, ±67.5° from dead astern).
 
     Dead astern is 180° relative to heading_forward.
     Approaching from > 22°30' abaft the beam corresponds to within ±67.5° of dead astern (135° sector).
@@ -491,25 +493,22 @@ def classify_encounter(
     min_moving_speed: float = 0.5,
     min_overtaking_speed_diff: float = 0.5,
 ) -> str:
-    """
-    Classify encounter between two vessels based on relative course, along-track passing, and approach angle.
+    """Classify encounter between two vessels based on relative course, along-track passing, and approach angle.
 
-    Juridical Context (BPR BWBR0003628 art. 6.01):
-      - 'head-on' (art. 6.01 onder a, naderen op tegengestelde koersen): elkaar naderen van
-        twee schepen op koersen die recht of vrijwel recht aan elkaar tegengesteld zijn (135° <= rel_angle <= 225°).
-      - 'overtaking' (art. 6.01 onder b/c, oplopen & voorbijlopen):
-          * oplopen (onder b): naderen door een schip van een ander schip uit een richting van meer dan 22°30´
-            achterlijker dan dwars van dat schip (is_abaft is True);
-          * voorbijlopen (onder c): manoeuvre die het gevolg is van oplopen totdat de schepen geheel vrij van elkaar zijn
-            (daarbij treedt daadwerkelijke langsscheepse passage op).
-      - 'parallel_sailing': zelfde koers (rel_angle <= 45°) zonder daadwerkelijke passage (bijv. gekoppeld).
-      - 'crossing' (art. 6.01 onder d, kruisende koersen): elkaar naderen van twee schepen onder zodanige hoek,
-        dat er geen sprake is van naderen op tegengestelde koers dan wel oplopen. Schepen op dezelfde koers die
-        buiten de heklichtsector (> 22°30' achterlijker dan dwars) naderen vallen hieronder.
-      - 'stationary': beide schepen stilliggend/afgemeerd (< min_moving_speed m/s).
+    Regulatory Context (BPR art. 6.01 & COLREGS Rule 13 / 14 / 15):
+      - 'head-on' (BPR art. 6.01(a), "naderen op tegengestelde koersen"): vessels approaching
+        each other on courses that are directly or nearly directly opposite (135° <= rel_angle <= 225°).
+      - 'overtaking' (BPR art. 6.01(b/c), "oplopen" & "voorbijlopen"):
+          * overtaking approach (6.01(b)): approaching from a direction > 22°30' abaft the beam (is_abaft is True);
+          * passing maneuver (6.01(c)): along-track passing occurs until vessels are clear.
+      - 'parallel_sailing': same general direction (rel_angle <= 45°) without passing (e.g. coupled or co-sailing).
+      - 'crossing' (BPR art. 6.01(d), "kruisende koersen"): courses intersecting at an angle (45° < rel_angle < 135°
+        or 225° < rel_angle < 315°), or same-direction approaches outside the > 22°30' abaft-the-beam sector
+        (approaching from abeam or forward of the beam).
+      - 'stationary': both vessels are stationary/moored (< min_moving_speed m/s).
 
     Returns:
-      'head-on', 'overtaking', 'parallel_sailing', 'crossing', of 'stationary'.
+      'head-on', 'overtaking', 'parallel_sailing', 'crossing', or 'stationary'.
     """
     if speed1 is not None and speed2 is not None:
         if speed1 < min_moving_speed and speed2 < min_moving_speed:
@@ -1518,7 +1517,7 @@ def generate_encounter_timeseries(
     lookup = _build_trajectory_lookup(segments_gdf, max_gap_seconds=max_gap_seconds)
 
     if client is not None and len(encounters_gdf) > 50:
-        logger.info(f"Distributing time series generation across encounters with Dask...")
+        logger.info("Distributing time series generation across encounters with Dask...")
         n_workers = len(client.scheduler_info().get('workers', {})) or 4
         n_chunks = max(8, n_workers * 4)
         chunk_size = int(np.ceil(len(encounters_gdf) / n_chunks))
