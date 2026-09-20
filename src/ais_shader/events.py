@@ -449,10 +449,21 @@ def check_abaft_the_beam(
     p_overtaking: np.ndarray,
     sector_deg: float = 67.5,
 ) -> tuple[bool, float]:
-    """Check whether p_overtaking approaches p_forward from > 22.5° abaft the beam (BPR art. 6.01 / COLREGS Rule 13).
+    """Check whether p_overtaking approaches p_forward from > 22.5° abaft the beam.
+
+    Juridical Context (BPR vs. COLREGS):
+        - BPR art. 6.01 onder b («voorbijlopen»): 'het inhalen of voorbijvaren van een
+          ander schip op dezelfde of nagenoeg dezelfde koers'.
+          BPR art. 6.01 bevat zelf geen numerieke gradenhoek. In de binnenvaartjurisprudentie
+          en praktijk wordt voor de afbakening aangesloten bij de zichtbaarheid van de
+          boordlichten versus het heklicht (BPR art. 3.13 e.v. / 135° heklichtsector).
+        - COLREGS Voorschrift 13(b) formuleert deze heklichtgrens expliciet geometrisch:
+          nadering uit een richting van meer dan 22°30' (22.5°) achterlijker dan dwars,
+          oftewel binnen de 135° heklichtsector (±67.5° ten opzichte van recht achteruit).
 
     Dead astern is 180° relative to heading_forward.
-    Approaching from > 22.5° (22°30') abaft the beam corresponds to within ±67.5° of dead astern (the 135° sternlight sector).
+    Approaching within the 135° sternlight sector corresponds to ±67.5° from dead astern
+    (> 22.5° abaft the beam).
 
     Returns:
         (is_abaft, abaft_beam_deg)
@@ -486,14 +497,22 @@ def classify_encounter(
     """
     Classify encounter between two vessels based on relative course, along-track passing, and approach angle.
 
+    Juridical Context (BPR BWBR0003628 art. 6.01):
+      - 'head-on' (opvaren, art. 6.01 onder c): het ontmoeten van een ander schip op
+        tegengestelde of nagenoeg tegengestelde koers (135° <= rel_angle <= 225°).
+      - 'overtaking' (voorbijlopen, art. 6.01 onder b): het inhalen of voorbijvaren van een
+        ander schip op dezelfde of nagenoeg dezelfde koers (rel_angle <= 45°) EN naderend
+        vanuit de heklichtsector (> 22°30' achterlijker dan dwars, ontleend aan BPR art. 3.13 /
+        COLREGS Rule 13) EN er treedt een daadwerkelijke langsscheepse passage op.
+      - 'parallel_sailing': zelfde koers (rel_angle <= 45°) zonder daadwerkelijke passage
+        (gekoppeld of naast elkaar varend).
+      - 'crossing' (kruisen, art. 6.01 onder d): het varen op een koers die die van een ander
+        schip snijdt, anders dan bij voorbijvaren of opvaren. Omvat tevens schepen op nagenoeg
+        dezelfde koers die van buiten de heklichtsector naderen (vanaf de boeg of dwars).
+      - 'stationary': beide schepen stilliggend/afgemeerd (< min_moving_speed m/s).
+
     Returns:
-      'head-on'          : opposite courses (135 <= rel_angle <= 225)
-      'overtaking'       : same general direction (rel_angle <= 45) AND approach is from > 22°30' abaft the beam
-                           (when is_abaft is specified) AND along-track passing occurs
-      'parallel_sailing' : same general direction (rel_angle <= 45) without passing (co-sailing abreast)
-      'crossing'         : courses intersecting at an angle (45 < rel_angle < 135 or 225 < rel_angle < 315),
-                           or same direction approaches outside the > 22°30' abaft the beam overtaking sector
-      'stationary'       : both vessels are stationary/moored (< min_moving_speed m/s)
+      'head-on', 'overtaking', 'parallel_sailing', 'crossing', of 'stationary'.
     """
     if speed1 is not None and speed2 is not None:
         if speed1 < min_moving_speed and speed2 < min_moving_speed:
