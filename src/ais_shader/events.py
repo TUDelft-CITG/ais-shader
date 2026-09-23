@@ -32,7 +32,6 @@ SEGMENT_VESSEL_COLS = [
     'MMSI', 'trip_id', 'VesselType', 'VesselGroup', 'Length', 'Width', 'Draft', 'sog', 'speed_mps'
 ]
 
-
 def _require_columns(gdf: gpd.GeoDataFrame, columns: list, label: str) -> None:
     missing = [c for c in columns if c not in gdf.columns]
     if missing:
@@ -122,9 +121,9 @@ def detect_line_crossings(segments_gdf: gpd.GeoDataFrame, passage_lines_gdf: gpd
         f_segs.append(f_seg)
     f_seg_arr = np.array(f_segs, dtype=float)
 
-    # Classify crossing direction via the sign of the cross product between
+    # Classify crossing direction via the sign of the cross product L x S between
     # the segment's own vector (S) and each passage line's start->end vector
-    # (L): rotating L by -90 degrees gives its right-hand normal, and the dot
+    # (L): rotating L by 90 degrees gives its left-hand normal, and the dot
     # of S with that normal is >=0 when the segment crosses left-to-right of
     # L's direction ('down'), negative when right-to-left ('up'). This is the
     # same normal-vector convention process_partition uses in analysis.py.
@@ -132,6 +131,7 @@ def detect_line_crossings(segments_gdf: gpd.GeoDataFrame, passage_lines_gdf: gpd
     S_x, S_y = ends[:, 0] - starts[:, 0], ends[:, 1] - starts[:, 1]
     L_x_val = passage_lines_3857['L_x'].loc[joined['index_right']].values
     L_y_val = passage_lines_3857['L_y'].loc[joined['index_right']].values
+    
     dot_product = S_x * (-L_y_val) + S_y * L_x_val
     direction = np.where(dot_product >= 0, 'down', 'up')
 
