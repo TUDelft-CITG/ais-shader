@@ -8,6 +8,7 @@ from ais_shader.rws import (
     build_rws_fairway,
     fetch_rws_fairway_sections,
     fetch_rws_kilometer_markers,
+    fetch_rws_lock_chambers,
 )
 
 
@@ -115,3 +116,22 @@ def test_fetch_rws_fairway_sections_no_filters():
 def test_fetch_rws_kilometer_markers_no_filters():
     with pytest.raises(ValueError, match="Must specify at least one of fairway_id or bbox"):
         fetch_rws_kilometer_markers()
+
+
+def test_fetch_rws_lock_chambers_calls_query(monkeypatch):
+    called = {}
+
+    def mock_query(layer_id, where="1=1", bbox=None, out_fields="*", return_geometry=True, out_crs="EPSG:4326"):
+        called["layer_id"] = layer_id
+        called["where"] = where
+        called["bbox"] = bbox
+        called["out_crs"] = out_crs
+        return gpd.GeoDataFrame({"name": ["Westkolk"]}, geometry=[Point(4.4, 51.69)], crs=out_crs)
+
+    monkeypatch.setattr("ais_shader.rws.query_rws_arcgis_layer", mock_query)
+    gdf = fetch_rws_lock_chambers(bbox=(4.3, 51.6, 4.5, 51.8), out_crs="EPSG:28992")
+    assert called["layer_id"] == 65
+    assert called["bbox"] == (4.3, 51.6, 4.5, 51.8)
+    assert called["out_crs"] == "EPSG:28992"
+    assert len(gdf) == 1
+    assert gdf["name"].iloc[0] == "Westkolk"

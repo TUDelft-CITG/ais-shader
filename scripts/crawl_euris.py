@@ -3,29 +3,29 @@
 crawl_euris.py
 
 Crawls live AIS vessel positions from the EURIS portal WebSocket API
-(wss://www.eurisportal.eu/api/AISTracks/Connect) using JSON-RPC 2.0 GetFeatures.
-
-Based on RWS-NL/fis-crawler:
-https://github.com/RWS-NL/fis-crawler/blob/main/notebooks/ais_analysis.ipynb
+(wss://www.eurisportal.eu/api/AISTracks/Connect) using a persistent WebSocket connection
+and JSON-RPC 2.0 GetFeatures requests.
+Takes a GeoJSON polygon defining the region of interest, filters fixes to that polygon,
+saves data as standardized GeoParquet (EPSG:4326), and removes the temporary streaming buffer.
 
 Usage:
-  python scripts/crawl_euris.py --duration-minutes 10 --interval-seconds 10
+  uv run python scripts/crawl_euris.py --geojson examples/data/volkerak.geojson --duration-minutes 2
 """
 
-import argparse
+from __future__ import annotations
+
 import asyncio
 import datetime
 import json
 import logging
-import os
-import sys
 import time
 from pathlib import Path
+from typing import Optional
 
+import click
 import geopandas as gpd
 import pandas as pd
 import shapely
-from shapely.geometry import Point
 import websockets
 
 logging.basicConfig(
@@ -35,14 +35,6 @@ logging.basicConfig(
 logger = logging.getLogger("crawl_euris")
 
 AIS_WSS_URL = "wss://www.eurisportal.eu/api/AISTracks/Connect"
-
-# Default coordinates provided by user (Lek / Nederrijn / Amsterdam-Rijnkanaal area)
-DEFAULT_BBOX = {
-    "minLat": 51.93279803741953,
-    "minLon": 4.94651227667174,
-    "maxLat": 52.17818437072481,
-    "maxLon": 5.415196530034308,
-}
 
 STATUS_LABELS = {
     0: "Under way (engine)",
@@ -54,159 +46,233 @@ STATUS_LABELS = {
 }
 
 
+def parse_euris_feature(feat: dict, now_iso: str) -> Optional[dict]:
+    """
+    Parse a single GeoJSON Feature returned by the EURIS AIS WebSocket into
+    a normalized flat record matching ais-shader requirements.
+    """
+    props = feat.get("properties", {})
+    geom = feat.get("geometry", {})
+    coords = geom.get("coordinates", [None, None])
+
+    lon = props.get("Lon", coords[0])
+    lat = props.get("Lat", coords[1])
+    if lon is None or lat is None:
+        return None
+
+    mmsi = str(props.get("MMSI") or "")
+    if not mmsi or mmsi == "0":
+        mmsi = str(props.get("TrackID") or feat.get("id") or "")
+    if not mmsi:
+        return None
+
+    dim_a = float(props.get("DimA") or 0.0)
+    dim_b = float(props.get("DimB") or 0.0)
+    dim_c = float(props.get("DimC") or 0.0)
+    dim_d = float(props.get("DimD") or 0.0)
+    length = dim_a + dim_b
+    beam = dim_c + dim_d
+
+    sog = float(props.get("SOG") or 0.0)
+    cog = float(props.get("COG") or 0.0)
+    th = float(props.get("TH") or 0.0)
+    heading = th if th > 0 else cog
+    st = int(props.get("ST") or 15)
+
+    return {
+        "mmsi": mmsi,
+        "base_date_time": now_iso,
+        "latitude": float(lat),
+        "longitude": float(lon),
+        "sog": sog,
+        "cog": cog,
+        "heading": heading,
+        "length": length if length > 0 else None,
+        "beam": beam if beam > 0 else None,
+        "shiptypeAIS": int(props.get("VT") or props.get("VG") or 0),
+        "status": st,
+        "status_label": STATUS_LABELS.get(st, "Undefined"),
+        "vessel_name": str(props.get("Name") or f"Track {mmsi}"),
+    }
+
+
 async def crawl_euris(
-    bbox: dict,
+    geojson_path: Path,
     duration_seconds: float = 600.0,
     interval_seconds: float = 10.0,
-    output_dir: Path = Path("/scratch-shared/fbaart/data/euris_crawl"),
-):
+    output_dir: Path = Path("data/euris_crawl"),
+) -> Path:
+    # Fail fast on missing GeoJSON input region
+    gdf_poly = gpd.read_file(geojson_path)
+    if gdf_poly.crs is None:
+        gdf_poly = gdf_poly.set_crs("EPSG:4326")
+    elif gdf_poly.crs.to_epsg() != 4326:
+        gdf_poly = gdf_poly.to_crs("EPSG:4326")
+
+    union_polygon = shapely.unary_union(gdf_poly.geometry.values)
+    minx, miny, maxx, maxy = gdf_poly.total_bounds
+    bbox = {
+        "minLon": float(minx),
+        "minLat": float(miny),
+        "maxLon": float(maxx),
+        "maxLat": float(maxy),
+    }
+
     output_dir.mkdir(parents=True, exist_ok=True)
     start_dt = datetime.datetime.now(datetime.timezone.utc)
     timestamp_tag = start_dt.strftime("%Y%m%d_%H%M%S")
 
     ndjson_path = output_dir / f"euris_crawl_{timestamp_tag}.ndjson"
     parquet_path = output_dir / f"euris_crawl_{timestamp_tag}.geoparquet"
-    geojson_path = output_dir / f"euris_crawl_{timestamp_tag}.geojson"
-    gpkg_path = output_dir / f"euris_crawl_{timestamp_tag}.gpkg"
 
     logger.info("=" * 75)
     logger.info("Starting EURIS AIS Live Crawl")
+    logger.info(f"Input Region (GeoJSON): {geojson_path}")
     logger.info(f"Target duration: {duration_seconds / 60:.1f} minutes ({duration_seconds:.0f}s)")
     logger.info(f"Sampling interval: {interval_seconds:.1f}s")
-    logger.info(f"Bounding box: Lat [{bbox['minLat']:.4f}, {bbox['maxLat']:.4f}], Lon [{bbox['minLon']:.4f}, {bbox['maxLon']:.4f}]")
-    logger.info(f"Streaming raw NDJSON to: {ndjson_path}")
+    logger.info(
+        f"Bounding box: Lat [{bbox['minLat']:.4f}, {bbox['maxLat']:.4f}], Lon [{bbox['minLon']:.4f}, {bbox['maxLon']:.4f}]"
+    )
+    logger.info(f"Streaming live buffer: {ndjson_path}")
     logger.info("=" * 75)
-
-    request_payload = {
-        "jsonrpc": "2.0",
-        "method": "GetFeatures",
-        "action": "subscribe",
-        "topic": "ais/target",
-        "bbox": bbox,
-    }
 
     records = []
     unique_tracks = set()
     start_time = time.monotonic()
     iteration = 0
 
-    logger.info("=" * 75)
-    logger.info(f"Starting EURIS AIS Live Crawl for {duration_seconds:.0f}s (Interval: {interval_seconds:.1f}s)")
-    logger.info(f"BBox: {bbox}")
-    logger.info(f"Streaming NDJSON: {ndjson_path}")
-    logger.info("=" * 75)
-
     with open(ndjson_path, "a", encoding="utf-8") as ndjson_file:
-        while True:
-            elapsed = time.monotonic() - start_time
-            if elapsed >= duration_seconds:
-                logger.info(f"Reached target duration ({elapsed:.1f}s >= {duration_seconds:.0f}s). Finishing crawl.")
-                break
-
-            poll_start = time.monotonic()
-            iteration += 1
-            now_utc = datetime.datetime.now(datetime.timezone.utc)
-            now_iso = now_utc.strftime("%Y-%m-%d %H:%M:%S")
-
+        while (time.monotonic() - start_time) < duration_seconds:
             try:
+                # Maintain a persistent WebSocket connection across polling intervals
                 async with websockets.connect(
-                    AIS_WSS_URL, open_timeout=10, max_size=10 * 1024 * 1024
+                    AIS_WSS_URL, open_timeout=15, max_size=10 * 1024 * 1024
                 ) as ws:
-                    await ws.send(json.dumps(request_payload))
-                    raw_resp = await asyncio.wait_for(ws.recv(), timeout=15)
-                    data = json.loads(raw_resp)
-                    features = data.get("result", {}).get("features", [])
+                    logger.info("Connected to EURIS AIS WebSocket.")
+                    while (time.monotonic() - start_time) < duration_seconds:
+                        poll_start = time.monotonic()
+                        iteration += 1
+                        now_utc = datetime.datetime.now(datetime.timezone.utc)
+                        now_iso = now_utc.strftime("%Y-%m-%d %H:%M:%S")
 
-                    batch_count = 0
-                    for feat in features:
-                        rec = parse_euris_feature(feat, now_iso)
-                        if rec is None:
-                            continue
-                        unique_tracks.add(rec["mmsi"])
-                        records.append(rec)
-                        ndjson_file.write(json.dumps(rec) + "\n")
-                        batch_count += 1
+                        request_payload = {
+                            "jsonrpc": "2.0",
+                            "method": "GetFeatures",
+                            "params": {
+                                "filters": {
+                                    "boundingBox": bbox,
+                                    "filterQuery": "()",
+                                }
+                            },
+                            "id": iteration,
+                        }
 
-                    ndjson_file.flush()
+                        await ws.send(json.dumps(request_payload))
+                        raw_resp = await asyncio.wait_for(ws.recv(), timeout=15)
+                        data = json.loads(raw_resp)
+                        features = data.get("result", {}).get("features", [])
 
-                    rem_time = max(0.0, duration_seconds - (time.monotonic() - start_time))
-                    logger.info(
-                        f"Snapshot #{iteration:03d} [{now_iso} UTC]: "
-                        f"{batch_count:3d} vessels | Total fixes: {len(records):6,d} | "
-                        f"Unique vessels: {len(unique_tracks):3d} | "
-                        f"Elapsed: {elapsed:5.1f}s / {duration_seconds:.0f}s (Remaining: {rem_time:5.1f}s)"
-                    )
+                        batch_count = 0
+                        for feat in features:
+                            rec = parse_euris_feature(feat, now_iso)
+                            if rec is None:
+                                continue
+                            unique_tracks.add(rec["mmsi"])
+                            records.append(rec)
+                            ndjson_file.write(json.dumps(rec) + "\n")
+                            batch_count += 1
+
+                        ndjson_file.flush()
+
+                        elapsed = time.monotonic() - start_time
+                        rem_time = max(0.0, duration_seconds - elapsed)
+                        logger.info(
+                            f"Snapshot #{iteration:03d} [{now_iso} UTC]: "
+                            f"{batch_count:3d} vessels | Total fixes: {len(records):6,d} | "
+                            f"Unique vessels: {len(unique_tracks):3d} | "
+                            f"Elapsed: {elapsed:5.1f}s / {duration_seconds:.0f}s (Remaining: {rem_time:5.1f}s)"
+                        )
+
+                        poll_duration = time.monotonic() - poll_start
+                        sleep_time = max(0.0, interval_seconds - poll_duration)
+                        if sleep_time > 0 and (time.monotonic() - start_time) < duration_seconds:
+                            await asyncio.sleep(sleep_time)
 
             except Exception as e:
-                logger.warning(f"Error during snapshot #{iteration}: {e}. Retrying in next interval...")
-
-            poll_duration = time.monotonic() - poll_start
-            sleep_time = max(0.0, interval_seconds - poll_duration)
-            if sleep_time > 0:
-                await asyncio.sleep(sleep_time)
+                elapsed = time.monotonic() - start_time
+                if elapsed >= duration_seconds:
+                    break
+                logger.warning(f"WebSocket connection error ({e}). Reconnecting in {interval_seconds:.1f}s...")
+                await asyncio.sleep(interval_seconds)
 
     if not records:
         logger.warning("No records were collected during the crawl.")
-        return
+        ndjson_path.unlink(missing_ok=True)
+        return parquet_path
 
-    # Convert collected records to GeoDataFrame and save GeoParquet & GeoJSON
-    logger.info("Converting collected records to GeoDataFrame...")
+    logger.info("Converting collected records to GeoDataFrame (EPSG:4326)...")
     df = pd.DataFrame(records)
     df["base_date_time"] = pd.to_datetime(df["base_date_time"])
     geoms = shapely.points(df["longitude"].values, df["latitude"].values)
     gdf = gpd.GeoDataFrame(df, geometry=geoms, crs="EPSG:4326")
 
-    logger.info(f"Saving GeoParquet dataset to {parquet_path}...")
+    # Spatially filter to exact GeoJSON polygon boundary
+    initial_count = len(gdf)
+    inside_mask = gdf.geometry.within(union_polygon)
+    gdf = gdf[inside_mask].copy().reset_index(drop=True)
+    logger.info(f"Spatial filtering to GeoJSON polygon: {len(gdf):,} fixes retained ({initial_count - len(gdf):,} outside boundary dropped).")
+
+    logger.info(f"Saving canonical GeoParquet dataset (EPSG:4326) to {parquet_path}...")
     gdf.to_parquet(parquet_path)
 
-    logger.info(f"Saving GeoPackage dataset to {gpkg_path}...")
-    gdf.to_file(gpkg_path, layer="raw_points", driver="GPKG")
-
-    logger.info(f"Saving GeoJSON snapshot to {geojson_path}...")
-    gdf.to_file(geojson_path, driver="GeoJSON")
+    # Clean up temporary streaming ndjson buffer
+    ndjson_path.unlink()
+    logger.info(f"Removed temporary stream buffer {ndjson_path.name}.")
 
     logger.info("=" * 75)
     logger.info("EURIS AIS Crawl Completed Successfully!")
-    logger.info(f"Total fixes recorded: {len(gdf):,}")
+    logger.info(f"Total fixes recorded in polygon: {len(gdf):,}")
     logger.info(f"Total unique vessels: {gdf['mmsi'].nunique():,}")
-    logger.info(f"Output GeoPackage: {gpkg_path} ({gpkg_path.stat().st_size / 1024:.1f} KB)")
+    logger.info(f"CRS: {gdf.crs.to_string()}")
     logger.info(f"Output GeoParquet: {parquet_path} ({parquet_path.stat().st_size / 1024:.1f} KB)")
-    logger.info(f"Output NDJSON: {ndjson_path} ({ndjson_path.stat().st_size / 1024:.1f} KB)")
-    logger.info(f"Output GeoJSON: {geojson_path} ({geojson_path.stat().st_size / 1024:.1f} KB)")
     logger.info("=" * 75)
+    return parquet_path
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Crawl live AIS tracks from EURIS WebSocket API")
-    parser.add_argument("--duration-minutes", type=float, default=10.0, help="Duration to crawl in minutes (default: 10.0)")
-    parser.add_argument("--interval-seconds", type=float, default=10.0, help="Interval between requests in seconds (default: 10.0)")
-    parser.add_argument(
-        "--bbox",
-        type=str,
-        default=None,
-        help="Optional bbox 'minLon,minLat,maxLon,maxLat' (defaults to user Utrecht/Lek polygon)",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("/scratch-shared/fbaart/data/euris_crawl"),
-        help="Directory to save output files",
-    )
-    args = parser.parse_args()
-
-    bbox = DEFAULT_BBOX.copy()
-    if args.bbox:
-        parts = [float(x.strip()) for x in args.bbox.split(",")]
-        if len(parts) == 4:
-            bbox = {
-                "minLon": parts[0],
-                "minLat": parts[1],
-                "maxLon": parts[2],
-                "maxLat": parts[3],
-            }
-
-    duration_seconds = args.duration_minutes * 60.0
-    asyncio.run(crawl_euris(bbox, duration_seconds, args.interval_seconds, args.output_dir))
+@click.command()
+@click.option(
+    "--geojson",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("examples/data/volkerak.geojson"),
+    help="Path to GeoJSON file defining the input region (default: examples/data/volkerak.geojson)",
+)
+@click.option(
+    "--duration-minutes",
+    type=float,
+    default=2.0,
+    help="Duration to crawl in minutes (default: 2.0)",
+)
+@click.option(
+    "--interval-seconds",
+    type=float,
+    default=10.0,
+    help="Interval between requests in seconds (default: 10.0)",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    default=Path("examples/data"),
+    help="Directory to save output GeoParquet file (default: examples/data)",
+)
+def main(
+    geojson: Path,
+    duration_minutes: float,
+    interval_seconds: float,
+    output_dir: Path,
+):
+    """Crawl live AIS vessel positions from EURIS WebSocket API to GeoParquet for a GeoJSON region."""
+    duration_seconds = duration_minutes * 60.0
+    asyncio.run(crawl_euris(geojson, duration_seconds, interval_seconds, output_dir))
 
 
 if __name__ == "__main__":

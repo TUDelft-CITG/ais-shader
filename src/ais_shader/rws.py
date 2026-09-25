@@ -37,6 +37,7 @@ RWS_FIS_MAPSERVER_BASE = "https://geo.rijkswaterstaat.nl/arcgis/rest/services/GD
 LAYER_VAARWEGVAK = 58
 LAYER_VAARWEGEN = 55
 LAYER_KILOMETERMARKERING = 11
+LAYER_SLUISKOLK = 65
 
 
 def query_rws_arcgis_layer(
@@ -231,6 +232,33 @@ def fetch_rws_kilometer_markers(
         out_fields="*",
         return_geometry=True,
         out_crs=metric_crs,
+    )
+
+
+def fetch_rws_lock_chambers(
+    where: str = "1=1",
+    bbox: Optional[Tuple[float, float, float, float]] = None,
+    out_crs: Optional[str] = "EPSG:4326",
+) -> gpd.GeoDataFrame:
+    """
+    Fetch lock chamber polygons (sluiskolk_v, layer 65) from Rijkswaterstaat FIS VNDS.
+
+    Parameters
+    ----------
+    where : str
+        SQL WHERE clause (default '1=1').
+    bbox : tuple of float, optional
+        Bounding box (min_lon, min_lat, max_lon, max_lat) in EPSG:4326.
+    out_crs : str, optional
+        Target Coordinate Reference System (default 'EPSG:4326').
+    """
+    return query_rws_arcgis_layer(
+        layer_id=LAYER_SLUISKOLK,
+        where=where,
+        bbox=bbox,
+        out_fields="*",
+        return_geometry=True,
+        out_crs=out_crs,
     )
 
 
