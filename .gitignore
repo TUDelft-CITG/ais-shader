@@ -1,6 +1,11 @@
 rendered/
 rendered_debug/
 output_encounters/
+/data/
+
+examples/data/euris_crawl*.ndjson
+examples/data/volkerak*.geoparquet
+examples/data/euris_crawl_*.geoparquet
 
 .venv/
 __pycache__/

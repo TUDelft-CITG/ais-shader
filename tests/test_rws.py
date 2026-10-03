@@ -1,13 +1,13 @@
 import geopandas as gpd
 import numpy as np
-import pandas as pd
 import pytest
-from shapely.geometry import LineString, MultiLineString, Point
+from shapely.geometry import LineString, Point
 
 from ais_shader.rws import (
     build_rws_fairway,
     fetch_rws_fairway_sections,
     fetch_rws_kilometer_markers,
+    fetch_rws_lock_chambers,
 )
 
 
@@ -17,14 +17,21 @@ def test_build_rws_fairway_from_mock_gdf():
     sec2 = LineString([(105000, 400000), (110000, 400000)])
     sec3 = LineString([(110000, 400000), (115000, 400000)])
 
-    gdf = gpd.GeoDataFrame({
-        "objectid": [1, 2, 3],
-        "fairwayid": [15384, 15384, 15384],
-        "fairway_name": ["Amsterdam-Rijnkanaal", "Amsterdam-Rijnkanaal", "Amsterdam-Rijnkanaal"],
-        "routekmbegin": [10.0, 15.0, 20.0],
-        "routekmend": [15.0, 20.0, 25.0],
-        "geometry": [sec1, sec2, sec3],
-    }, crs="EPSG:28992")
+    gdf = gpd.GeoDataFrame(
+        {
+            "objectid": [1, 2, 3],
+            "fairwayid": [15384, 15384, 15384],
+            "fairway_name": [
+                "Amsterdam-Rijnkanaal",
+                "Amsterdam-Rijnkanaal",
+                "Amsterdam-Rijnkanaal",
+            ],
+            "routekmbegin": [10.0, 15.0, 20.0],
+            "routekmend": [15.0, 20.0, 25.0],
+            "geometry": [sec1, sec2, sec3],
+        },
+        crs="EPSG:28992",
+    )
 
     axis = build_rws_fairway(data=gdf, metric_crs="EPSG:28992")
     assert axis.fairway_name == "Amsterdam-Rijnkanaal"
@@ -32,9 +39,9 @@ def test_build_rws_fairway_from_mock_gdf():
     assert np.isclose(axis.chainage_start_m, 10000.0, atol=0.1)
 
     # Test point projection along the fairway
-    pts = gpd.GeoDataFrame({
-        "geometry": [Point(102000, 400050), Point(112000, 399970)]
-    }, crs="EPSG:28992")
+    pts = gpd.GeoDataFrame(
+        {"geometry": [Point(102000, 400050), Point(112000, 399970)]}, crs="EPSG:28992"
+    )
 
     ann = axis.annotate_points(pts)
     assert np.isclose(ann["chainage_m"].iloc[0], 12000.0, atol=0.1)
@@ -48,15 +55,18 @@ def test_build_rws_fairway_reverses_direction_if_inverted():
     sec1 = LineString([(100000, 400000), (105000, 400000)])
     sec2 = LineString([(105000, 400000), (110000, 400000)])
 
-    gdf = gpd.GeoDataFrame({
-        "objectid": [1, 2],
-        "fairwayid": [15384, 15384],
-        "fairway_name": ["Amsterdam-Rijnkanaal", "Amsterdam-Rijnkanaal"],
-        "routekmbegin": [0.0, 5.0],
-        "routekmend": [5.0, 10.0],
-        # Pass reversed list to linemerge to test orientation normalization
-        "geometry": [sec2, sec1],
-    }, crs="EPSG:28992")
+    gdf = gpd.GeoDataFrame(
+        {
+            "objectid": [1, 2],
+            "fairwayid": [15384, 15384],
+            "fairway_name": ["Amsterdam-Rijnkanaal", "Amsterdam-Rijnkanaal"],
+            "routekmbegin": [0.0, 5.0],
+            "routekmend": [5.0, 10.0],
+            # Pass reversed list to linemerge to test orientation normalization
+            "geometry": [sec2, sec1],
+        },
+        crs="EPSG:28992",
+    )
 
     axis = build_rws_fairway(data=gdf, metric_crs="EPSG:28992")
     coords = np.array(axis.centerline_geom.coords)
@@ -66,12 +76,14 @@ def test_build_rws_fairway_reverses_direction_if_inverted():
 
 def test_build_rws_fairway_missing_crs():
     sec1 = LineString([(100000, 400000), (105000, 400000)])
-    gdf = gpd.GeoDataFrame({
-        "fairwayid": [15384],
-        "fairway_name": ["Amsterdam-Rijnkanaal"],
-        "routekmbegin": [0.0],
-        "geometry": [sec1],
-    })
+    gdf = gpd.GeoDataFrame(
+        {
+            "fairwayid": [15384],
+            "fairway_name": ["Amsterdam-Rijnkanaal"],
+            "routekmbegin": [0.0],
+            "geometry": [sec1],
+        }
+    )
     gdf.crs = None
     with pytest.raises(ValueError, match="Input data has no CRS set"):
         build_rws_fairway(data=gdf)
@@ -79,11 +91,14 @@ def test_build_rws_fairway_missing_crs():
 
 def test_build_rws_fairway_missing_routekmbegin():
     sec1 = LineString([(100000, 400000), (105000, 400000)])
-    gdf = gpd.GeoDataFrame({
-        "fairwayid": [15384],
-        "fairway_name": ["Amsterdam-Rijnkanaal"],
-        "geometry": [sec1],
-    }, crs="EPSG:28992")
+    gdf = gpd.GeoDataFrame(
+        {
+            "fairwayid": [15384],
+            "fairway_name": ["Amsterdam-Rijnkanaal"],
+            "geometry": [sec1],
+        },
+        crs="EPSG:28992",
+    )
     with pytest.raises(KeyError, match="routekmbegin"):
         build_rws_fairway(data=gdf)
 
@@ -92,26 +107,64 @@ def test_build_rws_fairway_disjoint_geometry():
     # Two disconnected line segments
     sec1 = LineString([(100000, 400000), (105000, 400000)])
     sec2 = LineString([(110000, 400000), (115000, 400000)])  # 5km gap
-    gdf = gpd.GeoDataFrame({
-        "fairwayid": [15384, 15384],
-        "fairway_name": ["Amsterdam-Rijnkanaal", "Amsterdam-Rijnkanaal"],
-        "routekmbegin": [0.0, 10.0],
-        "geometry": [sec1, sec2],
-    }, crs="EPSG:28992")
+    gdf = gpd.GeoDataFrame(
+        {
+            "fairwayid": [15384, 15384],
+            "fairway_name": ["Amsterdam-Rijnkanaal", "Amsterdam-Rijnkanaal"],
+            "routekmbegin": [0.0, 10.0],
+            "geometry": [sec1, sec2],
+        },
+        crs="EPSG:28992",
+    )
     with pytest.raises(ValueError, match="do not form a single continuous line"):
         build_rws_fairway(data=gdf)
 
 
 def test_build_rws_fairway_no_filters():
-    with pytest.raises(ValueError, match="Must specify at least one of data, fairway_id, river_name, or bbox"):
+    with pytest.raises(
+        ValueError,
+        match="Must specify at least one of data, fairway_id, river_name, or bbox",
+    ):
         build_rws_fairway()
 
 
 def test_fetch_rws_fairway_sections_no_filters():
-    with pytest.raises(ValueError, match="Must specify at least one of fairway_id, name, or bbox"):
+    with pytest.raises(
+        ValueError, match="Must specify at least one of fairway_id, name, or bbox"
+    ):
         fetch_rws_fairway_sections()
 
 
 def test_fetch_rws_kilometer_markers_no_filters():
-    with pytest.raises(ValueError, match="Must specify at least one of fairway_id or bbox"):
+    with pytest.raises(
+        ValueError, match="Must specify at least one of fairway_id or bbox"
+    ):
         fetch_rws_kilometer_markers()
+
+
+def test_fetch_rws_lock_chambers_calls_query(monkeypatch):
+    called = {}
+
+    def mock_query(
+        layer_id,
+        where="1=1",
+        bbox=None,
+        out_fields="*",
+        return_geometry=True,
+        out_crs="EPSG:4326",
+    ):
+        called["layer_id"] = layer_id
+        called["where"] = where
+        called["bbox"] = bbox
+        called["out_crs"] = out_crs
+        return gpd.GeoDataFrame(
+            {"name": ["Westkolk"]}, geometry=[Point(4.4, 51.69)], crs=out_crs
+        )
+
+    monkeypatch.setattr("ais_shader.rws.query_rws_arcgis_layer", mock_query)
+    gdf = fetch_rws_lock_chambers(bbox=(4.3, 51.6, 4.5, 51.8), out_crs="EPSG:28992")
+    assert called["layer_id"] == 65
+    assert called["bbox"] == (4.3, 51.6, 4.5, 51.8)
+    assert called["out_crs"] == "EPSG:28992"
+    assert len(gdf) == 1
+    assert gdf["name"].iloc[0] == "Westkolk"
