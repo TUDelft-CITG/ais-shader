@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 from shapely.geometry import LineString, MultiLineString
 from shapely.ops import linemerge
@@ -33,7 +32,9 @@ from .fairway import FairwayAxis
 
 logger = logging.getLogger(__name__)
 
-RWS_FIS_MAPSERVER_BASE = "https://geo.rijkswaterstaat.nl/arcgis/rest/services/GDR/fis_vnds/MapServer"
+RWS_FIS_MAPSERVER_BASE = (
+    "https://geo.rijkswaterstaat.nl/arcgis/rest/services/GDR/fis_vnds/MapServer"
+)
 LAYER_VAARWEGVAK = 58
 LAYER_VAARWEGEN = 55
 LAYER_KILOMETERMARKERING = 11
@@ -87,7 +88,9 @@ def query_rws_arcgis_layer(
 
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "ais-shader/rws (https://github.com/TUDelft-CITG/ais-shader)"},
+        headers={
+            "User-Agent": "ais-shader/rws (https://github.com/TUDelft-CITG/ais-shader)"
+        },
     )
 
     with urllib.request.urlopen(req) as resp:
@@ -106,7 +109,9 @@ def query_rws_arcgis_layer(
 
     gdf = gpd.read_file(content)
     if gdf.crs is None:
-        raise ValueError(f"ArcGIS layer {layer_id} returned GeoDataFrame without a CRS.")
+        raise ValueError(
+            f"ArcGIS layer {layer_id} returned GeoDataFrame without a CRS."
+        )
     if out_crs and gdf.crs.to_string() != out_crs:
         gdf = gdf.to_crs(out_crs)
     return gdf
@@ -178,7 +183,9 @@ def fetch_rws_fairway_sections(
         if meta_matches.empty:
             raise ValueError(f"No RWS fairway found matching name '{name}'.")
         matched_ids = meta_matches["id"].dropna().astype(int).unique().tolist()
-        logger.info(f"Matched {len(matched_ids)} fairway IDs for '{name}': {matched_ids}")
+        logger.info(
+            f"Matched {len(matched_ids)} fairway IDs for '{name}': {matched_ids}"
+        )
         ids_str = ",".join(str(i) for i in matched_ids)
         where_clause = f"fairwayid IN ({ids_str})"
 
@@ -298,7 +305,9 @@ def build_rws_fairway(
             gdf = gdf.to_crs(metric_crs)
     else:
         if fairway_id is None and river_name is None and bbox is None:
-            raise ValueError("Must specify at least one of data, fairway_id, river_name, or bbox.")
+            raise ValueError(
+                "Must specify at least one of data, fairway_id, river_name, or bbox."
+            )
         gdf = fetch_rws_fairway_sections(
             fairway_id=fairway_id,
             name=river_name,
@@ -307,10 +316,14 @@ def build_rws_fairway(
         )
 
     if gdf.empty:
-        raise ValueError(f"No fairway sections found for fairway_id={fairway_id}, river_name={river_name}.")
+        raise ValueError(
+            f"No fairway sections found for fairway_id={fairway_id}, river_name={river_name}."
+        )
 
     if "routekmbegin" not in gdf.columns:
-        raise KeyError("Fairway sections must contain 'routekmbegin' column for chainage ordering and orientation.")
+        raise KeyError(
+            "Fairway sections must contain 'routekmbegin' column for chainage ordering and orientation."
+        )
 
     # Sort sections by route kilometrierung
     gdf = gdf.sort_values("routekmbegin").reset_index(drop=True)
@@ -338,14 +351,20 @@ def build_rws_fairway(
         p_first = first_sec.geometry.interpolate(0.0)
         p_last = last_sec.geometry.interpolate(last_sec.geometry.length)
 
-        start_pt = LineString([line_geom.coords[0], line_geom.coords[1]]).interpolate(0.0)
-        end_pt = LineString([line_geom.coords[-2], line_geom.coords[-1]]).interpolate(1.0)
+        start_pt = LineString([line_geom.coords[0], line_geom.coords[1]]).interpolate(
+            0.0
+        )
+        end_pt = LineString([line_geom.coords[-2], line_geom.coords[-1]]).interpolate(
+            1.0
+        )
 
         dist_direct = start_pt.distance(p_first) + end_pt.distance(p_last)
         dist_flipped = start_pt.distance(p_last) + end_pt.distance(p_first)
 
         if dist_flipped < dist_direct:
-            logger.info("Reversing fairway centerline vertices to match increasing route kilometrierung.")
+            logger.info(
+                "Reversing fairway centerline vertices to match increasing route kilometrierung."
+            )
             line_geom = LineString(line_geom.coords[::-1])
 
     display_name = river_name

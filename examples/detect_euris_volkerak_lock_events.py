@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Tuple
 
 import click
 import geopandas as gpd
@@ -65,7 +65,9 @@ def load_or_fetch_lock_chambers(
         else:
             gdf = gpd.read_file(lock_file)
     else:
-        logger.info(f"Querying RWS MapServer Layer 65 (sluiskolk_v) for Volkerak bbox: {volkerak_bbox}")
+        logger.info(
+            f"Querying RWS MapServer Layer 65 (sluiskolk_v) for Volkerak bbox: {volkerak_bbox}"
+        )
         gdf = fetch_rws_lock_chambers(bbox=volkerak_bbox, out_crs="EPSG:4326")
         lock_file.parent.mkdir(parents=True, exist_ok=True)
         gdf.to_parquet(lock_file)
@@ -94,7 +96,9 @@ def make_segments_from_points(
 
     time_col = "base_date_time" if "base_date_time" in gdf_pts.columns else "timestamp"
     if time_col not in gdf_pts.columns:
-        raise KeyError("Input AIS data must contain 'base_date_time' or 'timestamp' column.")
+        raise KeyError(
+            "Input AIS data must contain 'base_date_time' or 'timestamp' column."
+        )
 
     vessel_col = "mmsi" if "mmsi" in gdf_pts.columns else "MMSI"
     if vessel_col not in gdf_pts.columns:
@@ -110,12 +114,20 @@ def make_segments_from_points(
     sorted_df = gdf_metric.sort_values(by=["trip_id", time_col]).reset_index(drop=True)
 
     # Deduplicate consecutive identical coordinates for moving vessels
-    coords_all = np.column_stack([sorted_df.geometry.x.values, sorted_df.geometry.y.values])
+    coords_all = np.column_stack(
+        [sorted_df.geometry.x.values, sorted_df.geometry.y.values]
+    )
     trips_all = sorted_df["trip_id"].values
-    sogs_all = sorted_df["sog"].values if "sog" in sorted_df.columns else np.zeros(len(sorted_df))
+    sogs_all = (
+        sorted_df["sog"].values
+        if "sog" in sorted_df.columns
+        else np.zeros(len(sorted_df))
+    )
 
     same_trip = trips_all[1:] == trips_all[:-1]
-    same_coord = (coords_all[1:, 0] == coords_all[:-1, 0]) & (coords_all[1:, 1] == coords_all[:-1, 1])
+    same_coord = (coords_all[1:, 0] == coords_all[:-1, 0]) & (
+        coords_all[1:, 1] == coords_all[:-1, 1]
+    )
     is_moving = sogs_all[1:] >= 0.5
     drop_mask = np.zeros(len(sorted_df), dtype=bool)
     drop_mask[1:] = same_trip & same_coord & is_moving
@@ -145,11 +157,30 @@ def make_segments_from_points(
     v_lens = np.array([g.length for g in geoms])
     speeds_mps = v_lens / np.maximum(durations, 1e-3)
 
-    lengths = p1["length"].values if "length" in p1.columns else np.full(len(p1), np.nan)
+    lengths = (
+        p1["length"].values if "length" in p1.columns else np.full(len(p1), np.nan)
+    )
     widths = p1["beam"].values if "beam" in p1.columns else np.full(len(p1), np.nan)
     drafts = p1["draft"].values if "draft" in p1.columns else np.zeros(len(p1))
-    shiptypes = p1["shiptypeAIS"].values if "shiptypeAIS" in p1.columns else np.full(len(p1), 0)
+    shiptypes = (
+        p1["shiptypeAIS"].values if "shiptypeAIS" in p1.columns else np.full(len(p1), 0)
+    )
     vessel_groups = [classify_vessel_group(st) for st in shiptypes[valid]]
+
+    to_bows = (
+        p1["to_bow"].values if "to_bow" in p1.columns else np.full(len(p1), np.nan)
+    )
+    to_sterns = (
+        p1["to_stern"].values if "to_stern" in p1.columns else np.full(len(p1), np.nan)
+    )
+    to_ports = (
+        p1["to_port"].values if "to_port" in p1.columns else np.full(len(p1), np.nan)
+    )
+    to_starboards = (
+        p1["to_starboard"].values
+        if "to_starboard" in p1.columns
+        else np.full(len(p1), np.nan)
+    )
 
     df_segs = pd.DataFrame(
         {
@@ -159,6 +190,10 @@ def make_segments_from_points(
             "VesselGroup": vessel_groups,
             "Length": lengths[valid],
             "Width": widths[valid],
+            "to_bow": to_bows[valid],
+            "to_stern": to_sterns[valid],
+            "to_port": to_ports[valid],
+            "to_starboard": to_starboards[valid],
             "Draft": drafts[valid],
             "segment_start_time": pd.to_datetime(t1[valid]),
             "segment_end_time": pd.to_datetime(t2[valid]),
@@ -200,6 +235,10 @@ def make_trajectories_from_points(
                 "VesselGroup": classify_vessel_group(first_row.get("shiptypeAIS", 0)),
                 "Length": first_row.get("length", np.nan),
                 "Width": first_row.get("beam", np.nan),
+                "to_bow": first_row.get("to_bow", np.nan),
+                "to_stern": first_row.get("to_stern", np.nan),
+                "to_port": first_row.get("to_port", np.nan),
+                "to_starboard": first_row.get("to_starboard", np.nan),
                 "TrackStartTime": grp[time_col].min(),
                 "TrackEndTime": grp[time_col].max(),
                 "PointCount": len(grp),
@@ -216,13 +255,25 @@ def detect_chamber_occupancy(
 ) -> gpd.GeoDataFrame:
     """Identify vessels currently inside lock chambers with latest status and speed."""
     vessel_col = "mmsi" if "mmsi" in pts_metric.columns else "MMSI"
-    time_col = "base_date_time" if "base_date_time" in pts_metric.columns else "timestamp"
+    time_col = (
+        "base_date_time" if "base_date_time" in pts_metric.columns else "timestamp"
+    )
 
     cols = ["name", "objectid", "isrsid", "length", "width", "geometry"]
     joined = gpd.sjoin(pts_metric, locks_metric[cols], predicate="within")
     if joined.empty:
         return gpd.GeoDataFrame(
-            columns=["MMSI", "chamber_name", "chamber_id", "isrsid", "sog", "cog", "observation_time", "status", "geometry"],
+            columns=[
+                "MMSI",
+                "chamber_name",
+                "chamber_id",
+                "isrsid",
+                "sog",
+                "cog",
+                "observation_time",
+                "status",
+                "geometry",
+            ],
             geometry=[],
             crs=pts_metric.crs,
         )
@@ -243,6 +294,12 @@ def detect_chamber_occupancy(
                 "isrsid": latest.get("isrsid"),
                 "chamber_length": latest.get("length_right"),
                 "chamber_width": latest.get("width_right"),
+                "vessel_length": latest.get("length"),
+                "vessel_beam": latest.get("beam"),
+                "to_bow": latest.get("to_bow"),
+                "to_stern": latest.get("to_stern"),
+                "to_port": latest.get("to_port"),
+                "to_starboard": latest.get("to_starboard"),
                 "sog": float(latest.get("sog", 0.0)),
                 "cog": float(latest.get("cog", 0.0)),
                 "status": status_str,
@@ -310,8 +367,12 @@ def cli(
     )
 
     # 2. Load Lock Chambers
-    lock_chambers_metric = load_or_fetch_lock_chambers(lock_chambers_file, bbox_4326, metric_crs=DEFAULT_METRIC_CRS)
-    logger.info(f"Loaded {len(lock_chambers_metric)} lock chambers at Volkeraksluizen (CRS: {lock_chambers_metric.crs}).")
+    lock_chambers_metric = load_or_fetch_lock_chambers(
+        lock_chambers_file, bbox_4326, metric_crs=DEFAULT_METRIC_CRS
+    )
+    logger.info(
+        f"Loaded {len(lock_chambers_metric)} lock chambers at Volkeraksluizen (CRS: {lock_chambers_metric.crs})."
+    )
 
     # 3. Load AIS Points
     logger.info(f"Loading AIS point fixes from {input_file}...")
@@ -324,18 +385,28 @@ def cli(
         gdf_raw = gdf_raw.set_crs("EPSG:4326")
 
     # 4. Build Segments and Trajectories
-    pts_metric, segs_metric = make_segments_from_points(gdf_raw, metric_crs=DEFAULT_METRIC_CRS)
-    trajectories_metric = make_trajectories_from_points(pts_metric, metric_crs=DEFAULT_METRIC_CRS)
+    pts_metric, segs_metric = make_segments_from_points(
+        gdf_raw, metric_crs=DEFAULT_METRIC_CRS
+    )
+    trajectories_metric = make_trajectories_from_points(
+        pts_metric, metric_crs=DEFAULT_METRIC_CRS
+    )
 
     # 5. Detect Lock Chamber Transitions (Entry / Exit)
-    logger.info("Detecting lock chamber entry and exit events with polygon transition algorithm...")
+    logger.info(
+        "Detecting lock chamber entry and exit events with polygon transition algorithm..."
+    )
     lock_events_4326 = detect_polygon_entry_exit(
         segments_gdf=segs_metric,
         polygons_gdf=lock_chambers_metric,
         polygon_id_col="name",
         merge_gap_minutes=merge_gap_minutes,
     )
-    lock_events_metric = lock_events_4326.to_crs(DEFAULT_METRIC_CRS) if not lock_events_4326.empty else lock_events_4326
+    lock_events_metric = (
+        lock_events_4326.to_crs(DEFAULT_METRIC_CRS)
+        if not lock_events_4326.empty
+        else lock_events_4326
+    )
 
     # 6. Detect Current Chamber Occupancy (dwell / active vessels)
     logger.info("Detecting lock chamber occupancy and vessel dwell fixes...")
@@ -360,7 +431,13 @@ def cli(
                 f"{ch.get('width', 0):.1f} m",
             ]
         )
-    print(tabulate(chambers_table, headers=["ID", "Chamber Name", "ISRS ID", "Length", "Width"], tablefmt="github"))
+    print(
+        tabulate(
+            chambers_table,
+            headers=["ID", "Chamber Name", "ISRS ID", "Length", "Width"],
+            tablefmt="github",
+        )
+    )
 
     print("\n" + "=" * 80)
     print("CHAMBER OCCUPANCY (VESSELS CURRENTLY INSIDE CHAMBERS)")
@@ -378,7 +455,20 @@ def cli(
                     str(occ.get("last_seen")),
                 ]
             )
-        print(tabulate(occ_table, headers=["MMSI/Track", "Chamber", "Status", "SOG", "Pings", "Last Seen"], tablefmt="github"))
+        print(
+            tabulate(
+                occ_table,
+                headers=[
+                    "MMSI/Track",
+                    "Chamber",
+                    "Status",
+                    "SOG",
+                    "Pings",
+                    "Last Seen",
+                ],
+                tablefmt="github",
+            )
+        )
     else:
         print("No vessels currently detected inside lock chambers.")
 
@@ -405,9 +495,24 @@ def cli(
                     dwell_m,
                 ]
             )
-        print(tabulate(evt_table, headers=["MMSI", "Chamber", "Group", "Entry Time", "Exit Time", "Dwell (min)"], tablefmt="github"))
+        print(
+            tabulate(
+                evt_table,
+                headers=[
+                    "MMSI",
+                    "Chamber",
+                    "Group",
+                    "Entry Time",
+                    "Exit Time",
+                    "Dwell (min)",
+                ],
+                tablefmt="github",
+            )
+        )
     else:
-        print("No chamber boundary crossing transitions observed in current time window.")
+        print(
+            "No chamber boundary crossing transitions observed in current time window."
+        )
 
     # 9. Save GeoParquet outputs with explicit EPSG:28992 (RD New) CRS
     output_parquet.parent.mkdir(parents=True, exist_ok=True)
@@ -415,22 +520,32 @@ def cli(
     out_dir = output_parquet.parent
 
     # Save primary events or occupancy to output_parquet
-    primary_output = lock_events_metric if not lock_events_metric.empty else occupancy_metric
-    logger.info(f"Saving primary lock events GeoParquet ({primary_output.crs}) to {output_parquet}...")
+    primary_output = (
+        lock_events_metric if not lock_events_metric.empty else occupancy_metric
+    )
+    logger.info(
+        f"Saving primary lock events GeoParquet ({primary_output.crs}) to {output_parquet}..."
+    )
     primary_output.to_parquet(output_parquet)
 
     # Save companion layers to standardized GeoParquet files
     occupancy_file = out_dir / f"{out_stem}_chamber_occupancy.geoparquet"
     occupancy_metric.to_parquet(occupancy_file)
-    logger.info(f"Saved chamber occupancy GeoParquet ({occupancy_metric.crs}) to {occupancy_file} ({occupancy_file.stat().st_size / 1024:.1f} KB)")
+    logger.info(
+        f"Saved chamber occupancy GeoParquet ({occupancy_metric.crs}) to {occupancy_file} ({occupancy_file.stat().st_size / 1024:.1f} KB)"
+    )
 
     trajectories_file = out_dir / f"{out_stem}_trajectories.geoparquet"
     trajectories_metric.to_parquet(trajectories_file)
-    logger.info(f"Saved trajectories GeoParquet ({trajectories_metric.crs}) to {trajectories_file} ({trajectories_file.stat().st_size / 1024:.1f} KB)")
+    logger.info(
+        f"Saved trajectories GeoParquet ({trajectories_metric.crs}) to {trajectories_file} ({trajectories_file.stat().st_size / 1024:.1f} KB)"
+    )
 
     stationary_file = out_dir / f"{out_stem}_stationary.geoparquet"
     stationary_metric.to_parquet(stationary_file)
-    logger.info(f"Saved stationary vessels GeoParquet ({stationary_metric.crs}) to {stationary_file} ({stationary_file.stat().st_size / 1024:.1f} KB)")
+    logger.info(
+        f"Saved stationary vessels GeoParquet ({stationary_metric.crs}) to {stationary_file} ({stationary_file.stat().st_size / 1024:.1f} KB)"
+    )
 
     logger.info("=" * 80)
     logger.info("EURIS Volkerak Lock Events Detection Completed Successfully!")

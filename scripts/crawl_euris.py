@@ -70,6 +70,11 @@ def parse_euris_feature(feat: dict, now_iso: str) -> Optional[dict]:
     dim_b = float(props.get("DimB") or 0.0)
     dim_c = float(props.get("DimC") or 0.0)
     dim_d = float(props.get("DimD") or 0.0)
+    to_bow = dim_a
+    to_stern = dim_b
+    to_port = dim_c
+    to_starboard = dim_d
+
     length = dim_a + dim_b
     beam = dim_c + dim_d
 
@@ -87,6 +92,10 @@ def parse_euris_feature(feat: dict, now_iso: str) -> Optional[dict]:
         "sog": sog,
         "cog": cog,
         "heading": heading,
+        "to_bow": to_bow,
+        "to_stern": to_stern,
+        "to_port": to_port,
+        "to_starboard": to_starboard,
         "length": length if length > 0 else None,
         "beam": beam if beam > 0 else None,
         "shiptypeAIS": int(props.get("VT") or props.get("VG") or 0),
@@ -128,7 +137,9 @@ async def crawl_euris(
     logger.info("=" * 75)
     logger.info("Starting EURIS AIS Live Crawl")
     logger.info(f"Input Region (GeoJSON): {geojson_path}")
-    logger.info(f"Target duration: {duration_seconds / 60:.1f} minutes ({duration_seconds:.0f}s)")
+    logger.info(
+        f"Target duration: {duration_seconds / 60:.1f} minutes ({duration_seconds:.0f}s)"
+    )
     logger.info(f"Sampling interval: {interval_seconds:.1f}s")
     logger.info(
         f"Bounding box: Lat [{bbox['minLat']:.4f}, {bbox['maxLat']:.4f}], Lon [{bbox['minLon']:.4f}, {bbox['maxLon']:.4f}]"
@@ -195,14 +206,19 @@ async def crawl_euris(
 
                         poll_duration = time.monotonic() - poll_start
                         sleep_time = max(0.0, interval_seconds - poll_duration)
-                        if sleep_time > 0 and (time.monotonic() - start_time) < duration_seconds:
+                        if (
+                            sleep_time > 0
+                            and (time.monotonic() - start_time) < duration_seconds
+                        ):
                             await asyncio.sleep(sleep_time)
 
             except Exception as e:
                 elapsed = time.monotonic() - start_time
                 if elapsed >= duration_seconds:
                     break
-                logger.warning(f"WebSocket connection error ({e}). Reconnecting in {interval_seconds:.1f}s...")
+                logger.warning(
+                    f"WebSocket connection error ({e}). Reconnecting in {interval_seconds:.1f}s..."
+                )
                 await asyncio.sleep(interval_seconds)
 
     if not records:
@@ -220,7 +236,9 @@ async def crawl_euris(
     initial_count = len(gdf)
     inside_mask = gdf.geometry.within(union_polygon)
     gdf = gdf[inside_mask].copy().reset_index(drop=True)
-    logger.info(f"Spatial filtering to GeoJSON polygon: {len(gdf):,} fixes retained ({initial_count - len(gdf):,} outside boundary dropped).")
+    logger.info(
+        f"Spatial filtering to GeoJSON polygon: {len(gdf):,} fixes retained ({initial_count - len(gdf):,} outside boundary dropped)."
+    )
 
     logger.info(f"Saving canonical GeoParquet dataset (EPSG:4326) to {parquet_path}...")
     gdf.to_parquet(parquet_path)
@@ -234,7 +252,9 @@ async def crawl_euris(
     logger.info(f"Total fixes recorded in polygon: {len(gdf):,}")
     logger.info(f"Total unique vessels: {gdf['mmsi'].nunique():,}")
     logger.info(f"CRS: {gdf.crs.to_string()}")
-    logger.info(f"Output GeoParquet: {parquet_path} ({parquet_path.stat().st_size / 1024:.1f} KB)")
+    logger.info(
+        f"Output GeoParquet: {parquet_path} ({parquet_path.stat().st_size / 1024:.1f} KB)"
+    )
     logger.info("=" * 75)
     return parquet_path
 
