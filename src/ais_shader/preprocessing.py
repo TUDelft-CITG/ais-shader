@@ -850,18 +850,33 @@ def run_csv_conversion(
         client.close()
 
 
-def run_linestring_generation(input_file: Path, output_file: Path, vessel_codes_json: Path = None):
+def run_linestring_generation(
+    input_file: Path,
+    output_file: Path,
+    vessel_codes_json: Path = None,
+    time_col: Optional[str] = None,
+    vessel_id_col: Optional[str] = None,
+):
     """
     Aggregate point pings from trajectorized parquet into LineString GeoParquet with optional vessel codes config.
     """
     logger.info(f"Loading trajectorized points from {input_file}...")
     gdf = gpd.read_parquet(input_file)
     
-    # Dynamically detect time and vessel columns
-    time_col = 'base_date_time' if 'base_date_time' in gdf.columns else ('timestamp' if 'timestamp' in gdf.columns else None)
-    vessel_col = 'mmsi' if 'mmsi' in gdf.columns else ('track_id' if 'track_id' in gdf.columns else None)
+    # Auto-detect time and vessel columns if not explicitly passed via CLI.
+    # Explanation of next((c for c in candidates if c in columns), None):
+    # 1. (c for c in candidates if c in columns) is a lazy generator expression.
+    # 2. next(..., None) retrieves the first matching candidate in priority order
+    #    and short-circuits immediately without checking remaining candidates.
+    # 3. If no candidate matches, the default value None is returned safely.
+    time_col = time_col or next((c for c in ['base_date_time', 'timestamp', 'timestamp_recv'] if c in gdf.columns), None)
+    vessel_col = vessel_id_col or next((c for c in ['mmsi', 'track_id', 'mmsi_hash'] if c in gdf.columns), None)
     if not time_col or not vessel_col:
-        raise KeyError(f"Could not find time column or vessel ID column in dataset schema. Available columns: {list(gdf.columns)}")
+        raise KeyError(
+            f"Could not find time column or vessel ID column in dataset schema.\n"
+            f"Available columns: {list(gdf.columns)}\n"
+            f"Hint: Specify them explicitly using --time-col and --vessel-id-col."
+        )
 
     logger.info("Sorting data chronologically per trip...")
     gdf = gdf.sort_values(by=['trip_id', time_col])
@@ -872,10 +887,12 @@ def run_linestring_generation(input_file: Path, output_file: Path, vessel_codes_
     mmsis = grouped[vessel_col].first()
     start_times = grouped[time_col].min()
     end_times = grouped[time_col].max()
-    vessel_types = grouped['shiptypeAIS'].first() if 'shiptypeAIS' in gdf.columns else grouped.get_group(list(grouped.groups.keys())[0]).iloc[0].get('shiptypeAIS', np.nan)
+    shiptype_col = next((c for c in ['shiptypeAIS', 'shiptypeais', 'VesselType', 'vessel_type'] if c in gdf.columns), None)
+    vessel_types = grouped[shiptype_col].first() if shiptype_col else np.nan
     lengths = grouped['length'].first() if 'length' in gdf.columns else np.nan
     widths = grouped['beam'].first() if 'beam' in gdf.columns else np.nan
-    drafts = grouped['draught'].first() if 'draught' in gdf.columns else np.nan
+    draft_col = next((c for c in ['draught', 'draft'] if c in gdf.columns), None)
+    drafts = grouped[draft_col].first() if draft_col else np.nan
     
     geoms = []
     valid_trip_ids = []
@@ -978,6 +995,8 @@ def run_segment_generation(
     vessel_codes_json: Path = None,
     metric_crs: Optional[str] = None,
     max_segment_duration_s: float = 1800.0,
+    time_col: Optional[str] = None,
+    vessel_id_col: Optional[str] = None,
 ):
     """
     Generate point-pair line segments from trajectorized point dataset,
@@ -986,11 +1005,20 @@ def run_segment_generation(
     logger.info(f"Loading trajectorized points from {input_file}...")
     gdf = gpd.read_parquet(input_file)
     
-    # Dynamically detect time and vessel columns
-    time_col = 'base_date_time' if 'base_date_time' in gdf.columns else ('timestamp' if 'timestamp' in gdf.columns else None)
-    vessel_col = 'mmsi' if 'mmsi' in gdf.columns else ('track_id' if 'track_id' in gdf.columns else None)
+    # Auto-detect time and vessel columns if not explicitly passed via CLI.
+    # Explanation of next((c for c in candidates if c in columns), None):
+    # 1. (c for c in candidates if c in columns) is a lazy generator expression.
+    # 2. next(..., None) retrieves the first matching candidate in priority order
+    #    and short-circuits immediately without checking remaining candidates.
+    # 3. If no candidate matches, the default value None is returned safely.
+    time_col = time_col or next((c for c in ['base_date_time', 'timestamp', 'timestamp_recv'] if c in gdf.columns), None)
+    vessel_col = vessel_id_col or next((c for c in ['mmsi', 'track_id', 'mmsi_hash'] if c in gdf.columns), None)
     if not time_col or not vessel_col:
-        raise KeyError(f"Could not find time column or vessel ID column in dataset schema. Available columns: {list(gdf.columns)}")
+        raise KeyError(
+            f"Could not find time column or vessel ID column in dataset schema.\n"
+            f"Available columns: {list(gdf.columns)}\n"
+            f"Hint: Specify them explicitly using --time-col and --vessel-id-col."
+        )
 
     logger.info("Sorting data chronologically per trip...")
     gdf = gdf.sort_values(by=['trip_id', time_col])
@@ -1015,22 +1043,25 @@ def run_segment_generation(
     logger.info("Creating LineString geometries...")
     geoms = shapely.linestrings(coords)
 
-    if 'shiptypeAIS' not in p1.columns:
+    # Find vessel type column (handle case variations like shiptypeAIS vs shiptypeais)
+    shiptype_col = next((c for c in ['shiptypeAIS', 'shiptypeais', 'VesselType', 'vessel_type'] if c in p1.columns), None)
+    if not shiptype_col:
         raise KeyError(
-            "Expected a 'shiptypeAIS' column for vessel-group classification; "
+            "Expected a vessel type column ('shiptypeAIS' or 'shiptypeais') for vessel-group classification; "
             f"not found in dataset schema. Available columns: {list(p1.columns)}"
         )
     vessel_mapping = build_vessel_mapping(vessel_codes_json)
-    vessel_groups = pd.Series(p1['shiptypeAIS'].values).apply(lambda st: get_vessel_group(st, vessel_mapping)).values
+    vessel_groups = pd.Series(p1[shiptype_col].values).apply(lambda st: get_vessel_group(st, vessel_mapping)).values
 
+    draft_col = next((c for c in ['draught', 'draft'] if c in p1.columns), None)
     df_segments = pd.DataFrame({
         'MMSI': p1[vessel_col].values,
         'trip_id': p1['trip_id'].values,
-        'VesselType': p1['shiptypeAIS'].values,
+        'VesselType': p1[shiptype_col].values,
         'VesselGroup': vessel_groups,
         'Length': p1['length'].values if 'length' in p1.columns else np.nan,
         'Width': p1['beam'].values if 'beam' in p1.columns else np.nan,
-        'Draft': p1['draught'].values if 'draught' in p1.columns else np.nan,
+        'Draft': p1[draft_col].values if draft_col else np.nan,
         'segment_start_time': to_utc_datetime(p1[time_col]).values,
         'segment_end_time': to_utc_datetime(p2[time_col]).values,
         'speed_mps': p1['speed_mps'].values if 'speed_mps' in p1.columns else np.nan,

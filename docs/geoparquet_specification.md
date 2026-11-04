@@ -1,0 +1,88 @@
+# GeoParquet Dataset Specification for `ais-shader`
+
+This document specifies the schema, column definitions, coordinate reference systems (CRS), and directory partitioning expected by the `ais-shader` processing and visualization pipeline.
+
+---
+
+## 1. Geometry & Coordinate Reference Systems (CRS)
+
+| Aspect | Specification | Notes |
+|---|---|---|
+| **Geometry Column Name** | `geometry` (standard), `geom` (RWS/PostGIS), or `Shape` (US Marine Cadastre WKB) | `ais-shader` standardizes active geometry columns to `geometry`. |
+| **Geometry Type** | `Point(x, y)` for raw AIS pings; `LineString` for vessel trajectories; `LineString` (2-point) for segments | 2D coordinates without elevation (Z) or measure (M). |
+| **CRS for Trajectorization** | `EPSG:4326` (WGS84 in decimal degrees) | Required for local **Azimuthal Equidistant (AEQD)** projection centering on the first ping of each track to calculate metric distance, area, and speed. |
+| **CRS for Rendering & Tiles** | `EPSG:3857` (Web Mercator) | Standard coordinate system for web map tile pyramids (`{z}/{x}/{y}.png`) and Cloud Optimized GeoTIFFs (COG). |
+
+---
+
+## 2. Core Column Schema
+
+### 2.1 Essential Columns (Trajectorization & Shading)
+
+| Standard Name | Common Source Aliases | Arrow / Pandas Type | Description & Value Range |
+|---|---|---|---|
+| `vessel_id` | `mmsi_hash`, `mmsi`, `MMSI` | `string` or `int64` | Unique vessel identifier. Can be an anonymous hash or official MMSI. |
+| `timestamp` | `timestamp_recv`, `base_date_time` | `timestamp[us, tz=UTC]` / `datetime64[ns, UTC]` | Observation timestamp in UTC. |
+| `longitude` | `lon`, `x` | `float64` | Longitude in decimal degrees ($-180.0 \le x \le 180.0$). |
+| `latitude` | `lat`, `y` | `float64` | Latitude in decimal degrees ($-90.0 \le y \le 90.0$). |
+| `sog` | `speed_knots`, `speed` | `float64` | Speed Over Ground in knots ($0.0 \le \text{sog} \le 102.2$). If raw AIS integer units ($0.1$ knots), pass `--sog-raw-units`. |
+| `cog` | `course` | `float64` | Course Over Ground in degrees ($0.0 \le \text{cog} < 360.0$). |
+
+### 2.2 Optional / Analytical Columns (Event Detection & Classification)
+
+| Column | Aliases | Type | Description |
+|---|---|---|---|
+| `heading` | `true_heading` | `float64` | Vessel true compass heading ($0.0 \le \text{heading} < 360.0$, $511$ = not available). |
+| `status` | `objecttype`, `navstatus` | `string` or `int` | Navigational status code (e.g., `0` = under way using engine, `1` = at anchor, `5` = moored). |
+| `vessel_type` | `shiptypeais`, `vesselgroup`, `VesselGroup` | `string` or `int` | Classification group: `Cargo`, `Tanker`, `Tug`, `Passenger`, `Fishing`, `Pleasure`, etc. |
+| `length` | `vessel_length` | `float64` | Overall length in meters. |
+| `beam` | `width`, `vessel_width` | `float64` | Overall beam (width) in meters. |
+| `draft` | `draught` | `float64` | Maximum present static draught in meters. |
+
+---
+
+## 3. Storage & Partitioning Guidelines
+
+### 3.1 Hive Partitioning
+
+Large multi-day or multi-year AIS collections must be partitioned hierarchically into Hive partition directories:
+
+```text
+data/
+└── year=2025/
+    └── month=01/
+        ├── day=02/
+        │   └── part-00000.parquet
+        ├── day=03/
+        │   └── part-00000.parquet
+        └── ...
+```
+
+* `detect_hive_partitioning()` in `ais_shader.data_loader` automatically discovers `year`, `month`, and `day` partitioning schemes and maps them to PyArrow dataset partition fields.
+* Slicing by partition avoids scanning irrelevant time windows (predicate pushdown).
+
+### 3.2 GeoParquet Metadata
+
+Files must follow the [GeoParquet 1.0 or 1.1 Specification](https://geoparquet.org/):
+* File-level metadata key: `"geo"` containing JSON with:
+  * `"primary_column"`: name of the geometry column (`geometry`, `geom`, or `Shape`).
+  * `"columns"`: schema details for the geometry column, including `"encoding": "WKB"`, `"geometry_types"`, and `"crs"`.
+* Bounding boxes: Partition-level bounding boxes in file metadata enable spatial index filtering (`ddf.cx[minx:maxx, miny:maxy]`) without loading whole partitions.
+
+---
+
+## 4. Pipeline Stages & File Naming Conventions
+
+`ais-shader` produces intermediate and final datasets following standard naming suffixes:
+
+1. **Raw Input**: `*.parquet` / `*.geoparquet` (point pings in EPSG:4326).
+2. **Trajectorized Points**: `<name>-trajectorized.geoparquet`
+   * Contains calculated fields: `trip_id`, `time_diff_s`, `speed_mps`, `acceleration_mps2`, `turn_rate_from_cog`.
+3. **Aggregated Trajectories**: `<name>-lines.geoparquet`
+   * Contains `LineString` or `MultiLineString` geometries per trip.
+4. **Point-Pair Segments**: `<name>-segments.geoparquet`
+   * Contains 2-point `LineString` geometries connecting consecutive pings for event crossing and proximity interval calculations.
+5. **Tile Pyramids**: `tiles/{z}/{x}/{y}.png`
+   * Anti-aliased web tile rasters with colormaps and dynamic transparency.
+6. **Cloud Optimized GeoTIFF**: `tiles/{z}/cog.tif`
+   * Single or multi-band analytical COG with embedded overviews.
