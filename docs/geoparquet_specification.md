@@ -15,29 +15,32 @@ This document specifies the schema, column definitions, coordinate reference sys
 
 ---
 
-## 2. Core Column Schema
+## 2. Column Schema & CLI Arguments
 
-### 2.1 Essential Columns (Trajectorization & Shading)
+`ais-shader` defines a default column name for each field, supports alternative column names that are automatically detected, and allows explicit overrides via CLI arguments across the pipeline.
 
-| Standard Name | Common Source Aliases | Arrow / Pandas Type | Description & Value Range |
-|---|---|---|---|
-| `vessel_id` | `mmsi_hash`, `mmsi`, `MMSI` | `string` or `int64` | Unique vessel identifier. Can be an anonymous hash or official MMSI. |
-| `timestamp` | `timestamp_recv`, `base_date_time` | `timestamp[us, tz=UTC]` / `datetime64[ns, UTC]` | Observation timestamp in UTC. |
-| `longitude` | `lon`, `x` | `float64` | Longitude in decimal degrees ($-180.0 \le x \le 180.0$). |
-| `latitude` | `lat`, `y` | `float64` | Latitude in decimal degrees ($-90.0 \le y \le 90.0$). |
-| `sog` | `speed_knots`, `speed` | `float64` | Speed Over Ground in knots ($0.0 \le \text{sog} \le 102.2$). If raw AIS integer units ($0.1$ knots), pass `--sog-raw-units`. |
-| `cog` | `course` | `float64` | Course Over Ground in degrees ($0.0 \le \text{cog} < 360.0$). |
+### 2.1 Essential Trajectory & Spatial Columns
 
-### 2.2 Optional / Analytical Columns (Event Detection & Classification)
+| Default Column Name | Alternative Supported Column Names | CLI Argument | Data Type | Description & Value Range |
+|---|---|---|---|---|
+| `geometry` | `geom`, `Shape` | *(auto-detected active geometry)* | `Geometry (Point / LineString)` | WKB-encoded 2D geometry in `EPSG:4326` or `EPSG:3857`. |
+| `mmsi` | `track_id`, `mmsi_hash` | `--vessel-id-col` | `string` or `int64` | Unique vessel identifier or anonymous tracking hash. |
+| `base_date_time` | `timestamp`, `timestamp_recv` | `--time-col` | `timestamp[us, tz=UTC]` / `datetime64[ns, UTC]` | Observation timestamp in UTC. |
+| `longitude` | `lon`, `x` | `--x-col` | `float64` | Longitude in decimal degrees ($-180.0 \le x \le 180.0$). |
+| `latitude` | `lat`, `y` | `--y-col` | `float64` | Latitude in decimal degrees ($-90.0 \le y \le 90.0$). |
+| `sog` | `speed`, `speed_knots` | `--sog-raw-units` *(if 0.1 kn)* | `float64` | Speed Over Ground in knots ($0.0 \le \text{sog} \le 102.2$). |
+| `cog` | `course` | — | `float64` | Course Over Ground in degrees ($0.0 \le \text{cog} < 360.0$). |
 
-| Column | Aliases | Type | Description |
-|---|---|---|---|
-| `heading` | `true_heading` | `float64` | Vessel true compass heading ($0.0 \le \text{heading} < 360.0$, $511$ = not available). |
-| `status` | `objecttype`, `navstatus` | `string` or `int` | Navigational status code (e.g., `0` = under way using engine, `1` = at anchor, `5` = moored). |
-| `vessel_type` | `shiptypeais`, `vesselgroup`, `VesselGroup` | `string` or `int` | Classification group: `Cargo`, `Tanker`, `Tug`, `Passenger`, `Fishing`, `Pleasure`, etc. |
-| `length` | `vessel_length` | `float64` | Overall length in meters. |
-| `beam` | `width`, `vessel_width` | `float64` | Overall beam (width) in meters. |
-| `draft` | `draught` | `float64` | Maximum present static draught in meters. |
+### 2.2 Vessel Dimensions, Classification & Status
+
+| Default Column Name | Alternative Supported Column Names | CLI Argument | Data Type | Description & Value Range |
+|---|---|---|---|---|
+| `shiptypeAIS` | `shiptypeais`, `VesselType`, `vessel_type`, `VesselGroup` | `--category-column` *(in render)* | `string` or `int` | AIS ship type code (e.g. `70` = Cargo, `80` = Tanker) or mapped category group name. |
+| `draught` | `draft` | — | `float64` | Maximum static draught in meters. |
+| `length` | `vessel_length` | — | `float64` | Overall vessel length in meters. |
+| `beam` | `width`, `vessel_width` | — | `float64` | Overall vessel beam (width) in meters. |
+| `heading` | `true_heading` | — | `float64` | True compass heading ($0.0 \le \text{heading} < 360.0$, `511` = not available). |
+| `status` | `navstatus`, `objecttype` | — | `string` or `int` | Navigational status code (`0` = underway using engine, `1` = at anchor, `5` = moored). |
 
 ---
 
