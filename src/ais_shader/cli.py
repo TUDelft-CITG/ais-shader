@@ -475,6 +475,10 @@ def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, sche
                 f"Input {input_file} must be a GeoParquet dataset readable by dask_geopandas."
             )
 
+        # Standardize geometry column name to 'geometry' if a different name (e.g. 'geom') was used
+        if hasattr(ddf, "geometry") and ddf.geometry.name != "geometry":
+            ddf = ddf.rename_geometry("geometry")
+
         # Drop empty coordinates immediately so they don't distort spatial partitioning/Hilbert divisions
         ddf = ddf.dropna(subset=[x_col, y_col])
 
@@ -532,12 +536,24 @@ def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, sche
     default=None,
     help="Path to JSON mapping file for vessel type classification.",
 )
-def to_linestring(input_file, output_file, vessel_codes_json):
+@click.option(
+    "--vessel-id-col",
+    type=str,
+    default=None,
+    help="Vessel identifier column name. Defaults to auto-detection (mmsi, track_id, mmsi_hash).",
+)
+@click.option(
+    "--time-col",
+    type=str,
+    default=None,
+    help="Timestamp column name. Defaults to auto-detection (base_date_time, timestamp, timestamp_recv).",
+)
+def to_linestring(input_file, output_file, vessel_codes_json, vessel_id_col, time_col):
     """
     Aggregate points to LineString/MultiLineString trajectories matching Marine Cadastre schema.
     """
     output_file = output_file or _default_output_path(input_file, "-lines.geoparquet")
-    run_linestring_generation(input_file, output_file, vessel_codes_json)
+    run_linestring_generation(input_file, output_file, vessel_codes_json, time_col=time_col, vessel_id_col=vessel_id_col)
 
 
 @trajectory.command(name="to-segment")
@@ -587,14 +603,26 @@ def to_linestring(input_file, output_file, vessel_codes_json):
     default=1800.0,
     help="Maximum tracking gap in seconds to bridge with a segment (default: 1800.0s = 30 min). Longer gaps are dropped.",
 )
-def to_segment(input_file, output_file, epoch_time, vessel_codes_json, sog_raw_units, metric_crs, max_segment_duration_s):
+@click.option(
+    "--vessel-id-col",
+    type=str,
+    default=None,
+    help="Vessel identifier column name. Defaults to auto-detection (mmsi, track_id, mmsi_hash).",
+)
+@click.option(
+    "--time-col",
+    type=str,
+    default=None,
+    help="Timestamp column name. Defaults to auto-detection (base_date_time, timestamp, timestamp_recv).",
+)
+def to_segment(input_file, output_file, epoch_time, vessel_codes_json, sog_raw_units, metric_crs, max_segment_duration_s, vessel_id_col, time_col):
     """
     Generate point-pair line segments from trajectorized point trajectories.
     """
     output_file = output_file or _default_output_path(input_file, "-segments.geoparquet")
     run_segment_generation(
         input_file, output_file, sog_raw_units, epoch_time, vessel_codes_json, metric_crs=metric_crs,
-        max_segment_duration_s=max_segment_duration_s
+        max_segment_duration_s=max_segment_duration_s, time_col=time_col, vessel_id_col=vessel_id_col
     )
 
 

@@ -237,6 +237,7 @@ def aggregate_children(parent_key, children, var_name="counts"):
     z, px, py = parent_key
     child_ds_list = []
     all_categories = set()
+    all_bands = set()
     
     for child_path in children:
         with xr.open_zarr(child_path) as ds:
@@ -246,6 +247,8 @@ def aggregate_children(parent_key, children, var_name="counts"):
             da.load()
             child_ds_list.append((child_path, da))
             
+            if "band" in da.coords:
+                all_bands.update(da.coords["band"].values)
             non_spatial_dims = [d for d in da.dims if d not in ('y', 'x', 'band')]
             if non_spatial_dims:
                 cat_dim = non_spatial_dims[0]
@@ -255,27 +258,34 @@ def aggregate_children(parent_key, children, var_name="counts"):
     if not child_ds_list:
         return None
 
-    # Sort categories for consistency
+    # Sort categories and bands for consistency
     sorted_categories = sorted(list(all_categories))
+    sorted_bands = sorted(list(all_bands))
     
     # Create Parent DataArray
-    tile_size = 1024
     template_da = child_ds_list[0][1]
+    tile_size_y = template_da.sizes['y']
+    tile_size_x = template_da.sizes['x']
+    half_y = tile_size_y // 2
+    half_x = tile_size_x // 2
     parent_dims = list(template_da.dims)
     parent_coords = dict(template_da.coords)
     
-    if non_spatial_dims:
+    if sorted_bands:
+        parent_coords["band"] = sorted_bands
+        parent_shape = [len(sorted_bands) if d == 'band' else (tile_size_y if d == 'y' else (tile_size_x if d == 'x' else template_da.sizes[d])) for d in parent_dims]
+    elif non_spatial_dims:
         cat_dim = non_spatial_dims[0]
         parent_coords[cat_dim] = sorted_categories
         
         parent_shape = []
         for d in parent_dims:
-            if d == 'y': parent_shape.append(tile_size)
-            elif d == 'x': parent_shape.append(tile_size)
+            if d == 'y': parent_shape.append(tile_size_y)
+            elif d == 'x': parent_shape.append(tile_size_x)
             elif d == cat_dim: parent_shape.append(len(sorted_categories))
             else: parent_shape.append(template_da.sizes[d])
     else:
-        parent_shape = [template_da.sizes[d] if d not in ('y', 'x') else tile_size for d in parent_dims]
+        parent_shape = [template_da.sizes[d] if d not in ('y', 'x') else (tile_size_y if d == 'y' else tile_size_x) for d in parent_dims]
 
     parent_data = np.zeros(parent_shape, dtype=template_da.dtype)
     
@@ -289,17 +299,19 @@ def aggregate_children(parent_key, children, var_name="counts"):
         is_bottom = cy % 2
         
         # Invert Y-slice logic to construct a Bottom-up array (NetCDF standard)
-        y_slice = slice((1 - is_bottom) * 512, (2 - is_bottom) * 512)
-        x_slice = slice(is_right * 512, (is_right + 1) * 512)
+        y_slice = slice((1 - is_bottom) * half_y, (2 - is_bottom) * half_y)
+        x_slice = slice(is_right * half_x, (is_right + 1) * half_x)
         
-        if non_spatial_dims:
+        if "band" in da_child.coords and sorted_bands:
+            da_child_aligned = da_child.reindex(band=sorted_bands, fill_value=0)
+        elif non_spatial_dims:
             cat_dim = non_spatial_dims[0]
             da_child_aligned = da_child.reindex({cat_dim: sorted_categories}, fill_value=0)
         else:
             da_child_aligned = da_child
         
         if "band" in da_child_aligned.coords:
-            band_names = list(da_child_aligned.coords["band"].values)
+            band_names = sorted_bands
             coarsened_bands = []
             for band_name in band_names:
                 da_band = da_child_aligned.sel(band=band_name)
@@ -326,6 +338,8 @@ def aggregate_children(parent_key, children, var_name="counts"):
             coarsened = xr.concat(coarsened_bands, dim="band")
         else:
             coarsened = da_child_aligned.coarsen(y=2, x=2, boundary="trim").sum()
+        
+        coarsened = coarsened.transpose(*parent_dims)
         
         np_slices = []
         for d in parent_dims:
