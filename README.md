@@ -256,6 +256,7 @@ To view the raw data or high-resolution exports:
 - [Architecture & Design](docs/architecture.md): Details on the technology stack, partitioning strategy, and known issues.
 - [Inland Vessel Encounter Methodology](docs/encounter_methodology.md): Spatio-temporal encounter detection, stationary ship handling, Frenet-Serret fairway coordinate kinematics, and dynamic time series playback.
 - [Passage Line Crossing Methodology](docs/crossing_methodology.md): Passage gate intersections, lateral bin profiles, and crossing velocities.
+- [Design System](docs/design/README.md): Colour tokens (density ramps, vessel groups, encounter types, map features) and typography for maps, figures and dashboards; machine-readable in `docs/design/tokens.json`.
 - **Pipeline Schematic**:
   ![Pipeline Schematic](docs/pipeline.svg)
 
