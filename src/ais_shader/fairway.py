@@ -28,6 +28,8 @@ import shapely
 from shapely.geometry import LineString
 from scipy.spatial import cKDTree
 
+from .vector_io import read_vector
+
 logger = logging.getLogger(__name__)
 
 
@@ -107,10 +109,7 @@ class FairwayAxis:
         p = Path(path)
         if not p.exists():
             raise FileNotFoundError(f"Fairway file not found at {p}")
-        if p.suffix in [".parquet", ".geoparquet"]:
-            gdf = gpd.read_parquet(p)
-        else:
-            gdf = gpd.read_file(p)
+        gdf = read_vector(p)
         if gdf.empty:
             raise ValueError(f"Fairway file at {p} is empty.")
 
@@ -152,10 +151,7 @@ class FairwayAxis:
             p = Path(data)
             if not p.exists():
                 raise FileNotFoundError(f"Fairway file not found at {p}")
-            if p.suffix in [".parquet", ".geoparquet"]:
-                gdf = gpd.read_parquet(p)
-            else:
-                gdf = gpd.read_file(p)
+            gdf = read_vector(p)
         elif isinstance(data, gpd.GeoDataFrame):
             gdf = data.copy()
         else:

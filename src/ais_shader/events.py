@@ -5,15 +5,32 @@ from typing import Optional, Union, Tuple
 import geopandas as gpd
 import pandas as pd
 import shapely
-from shapely.geometry import Point, MultiPoint
+from shapely.geometry import MultiPoint
 import numpy as np
 import pyproj
 
 import dask
 from dask.distributed import Client
 
+from ais_shader.crossings import (
+    add_line_direction_vectors,
+    classify_crossing_direction,
+    crossing_points_and_fractions,
+    interpolate_event_time,
+    segment_start_end_coords,
+    segment_vectors,
+)
+from ais_shader.dask_utils import get_dask_client
 from ais_shader.fairway import FairwayAxis, get_utm_crs_for_lon_lat
 from ais_shader.preprocessing import to_utc_datetime
+from ais_shader.vector_io import (
+    assume_lonlat,
+    empty_geodataframe,
+    read_vector,
+    to_lonlat_crs,
+    to_metric_crs,
+    write_vector,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,41 +55,6 @@ def _require_columns(gdf: gpd.GeoDataFrame, columns: list, label: str) -> None:
         raise KeyError(f"{label} is missing required column(s) {missing}. Available: {list(gdf.columns)}")
 
 
-def _to_crs_3857(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    if gdf.crs is None:
-        gdf = gdf.set_crs("EPSG:4326")
-    return gdf if gdf.crs.to_epsg() == 3857 else gdf.to_crs("EPSG:3857")
-
-
-def _segment_start_end_coords(geoms: np.ndarray) -> tuple:
-    """Start/end coordinate arrays for an array of 2-point LineStrings, vectorized."""
-    coords = shapely.get_coordinates(geoms)
-    return coords[0::2], coords[1::2]
-
-
-def _crossing_point_and_fraction(seg_geom, ref_geom) -> tuple:
-    """Where a 2-point segment crosses a reference line/boundary, as (Point, fraction along segment).
-
-    Mirrors process_partition's intersection handling (analysis.py, lines
-    124-134): a straight 2-point segment against a straight reference line
-    normally intersects at a single Point, but defensively falls back to the
-    centroid for the rare non-Point result (e.g. the segment grazing a
-    polygon corner). Callers only invoke this on segments already known to
-    intersect ref_geom (via an `intersects` sjoin), so an empty intersection
-    here indicates a bug rather than a real geometric case.
-    """
-    isect = seg_geom.intersection(ref_geom)
-    if isect.is_empty:
-        raise ValueError(f"Segment {seg_geom.wkt} does not intersect reference geometry {ref_geom.wkt}")
-    point = isect if isinstance(isect, Point) else isect.centroid
-    f_seg = seg_geom.project(point, normalized=True)
-    return point, f_seg
-
-
-def _interpolate_time(start_time, duration_s: float, f_seg: float) -> pd.Timestamp:
-    return start_time + pd.to_timedelta(f_seg * duration_s, unit='s')
-
-
 def detect_line_crossings(segments_gdf: gpd.GeoDataFrame, passage_lines_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
     Detect where AIS trajectory segments cross reference passage lines.
@@ -91,53 +73,40 @@ def detect_line_crossings(segments_gdf: gpd.GeoDataFrame, passage_lines_gdf: gpd
 
     empty_cols = SEGMENT_VESSEL_COLS + ['PassageId', 'direction', 'event_time']
     if segments_gdf.empty:
-        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(empty_cols)
 
-    segments_3857 = _to_crs_3857(segments_gdf)
+    segments_3857 = to_metric_crs(segments_gdf)
     # Keep only the columns we need from the reference file: passage-line
     # datasets (e.g. EuRIS PassageLine exports) carry their own rich
     # property set, which can collide with segment column names (e.g. both
     # have a "Length" -- the passage line's own physical length vs. the
     # vessel's) and get silently suffixed by gpd.sjoin instead of erroring.
-    passage_lines_3857 = _to_crs_3857(passage_lines_gdf)[['PassageId', 'geometry']].reset_index(drop=True)
+    passage_lines_3857 = to_metric_crs(passage_lines_gdf)[['PassageId', 'geometry']].reset_index(drop=True)
 
     # Precompute each passage line's own direction vector (line's own
     # start->end), used below to classify crossing direction.
-    coords_list = [g.coords for g in passage_lines_3857.geometry]
-    passage_lines_3857['L_x'] = np.array([c[-1][0] - c[0][0] for c in coords_list])
-    passage_lines_3857['L_y'] = np.array([c[-1][1] - c[0][1] for c in coords_list])
+    add_line_direction_vectors(passage_lines_3857)
 
     joined = gpd.sjoin(segments_3857, passage_lines_3857, predicate='intersects', how='inner')
     if joined.empty:
-        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(empty_cols)
 
     seg_geoms = joined.geometry.values
     pass_geoms = passage_lines_3857.geometry.loc[joined['index_right']].values
 
-    points_3857, f_segs = [], []
-    for seg_geom, pass_geom in zip(seg_geoms, pass_geoms):
-        point, f_seg = _crossing_point_and_fraction(seg_geom, pass_geom)
-        points_3857.append(point)
-        f_segs.append(f_seg)
-    f_seg_arr = np.array(f_segs, dtype=float)
+    points_3857, f_seg_arr = crossing_points_and_fractions(seg_geoms, pass_geoms)
 
-    # Classify crossing direction via the sign of the cross product L x S between
-    # the segment's own vector (S) and each passage line's start->end vector
-    # (L): rotating L by 90 degrees gives its left-hand normal, and the dot
-    # of S with that normal is >=0 when the segment crosses left-to-right of
-    # L's direction ('down'), negative when right-to-left ('up'). This is the
-    # same normal-vector convention process_partition uses in analysis.py.
-    starts, ends = _segment_start_end_coords(seg_geoms)
-    S_x, S_y = ends[:, 0] - starts[:, 0], ends[:, 1] - starts[:, 1]
-    L_x_val = passage_lines_3857['L_x'].loc[joined['index_right']].values
-    L_y_val = passage_lines_3857['L_y'].loc[joined['index_right']].values
-    
-    dot_product = S_x * (-L_y_val) + S_y * L_x_val
-    direction = np.where(dot_product >= 0, 'down', 'up')
+    S_x, S_y = segment_vectors(seg_geoms)
+    direction = classify_crossing_direction(
+        S_x=S_x,
+        S_y=S_y,
+        L_x=passage_lines_3857['L_x'].loc[joined['index_right']].values,
+        L_y=passage_lines_3857['L_y'].loc[joined['index_right']].values,
+    )
 
     segment_start_time = pd.to_datetime(joined['segment_start_time'].values)
     segment_duration_s = joined['segment_duration_s'].values
-    event_time = _interpolate_time(segment_start_time, segment_duration_s, f_seg_arr)
+    event_time = interpolate_event_time(segment_start_time, segment_duration_s, f_seg_arr)
 
     points_4326 = gpd.GeoSeries(points_3857, crs="EPSG:3857").to_crs("EPSG:4326")
     geometry = [MultiPoint([pt]) for pt in points_4326]
@@ -194,22 +163,22 @@ def detect_polygon_entry_exit(
 
     empty_cols = SEGMENT_VESSEL_COLS + [polygon_id_col, 'entry_time', 'exit_time']
     if segments_gdf.empty:
-        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(empty_cols)
 
-    segments_3857 = _to_crs_3857(segments_gdf)
+    segments_3857 = to_metric_crs(segments_gdf)
     # As in detect_line_crossings: keep only the id + geometry columns from
     # the reference file to avoid gpd.sjoin silently suffixing any column
     # name shared with the segment table.
-    polygons_3857 = _to_crs_3857(polygons_gdf)[[polygon_id_col, 'geometry']].reset_index(drop=True)
+    polygons_3857 = to_metric_crs(polygons_gdf)[[polygon_id_col, 'geometry']].reset_index(drop=True)
     boundaries = polygons_3857.geometry.boundary
 
     joined = gpd.sjoin(segments_3857, polygons_3857, predicate='intersects', how='inner')
     if joined.empty:
-        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(empty_cols)
 
     seg_geoms = joined.geometry.values
     polygon_geoms = polygons_3857.geometry.loc[joined['index_right']].values
-    starts, ends = _segment_start_end_coords(seg_geoms)
+    starts, ends = segment_start_end_coords(seg_geoms)
 
     start_inside = shapely.covers(polygon_geoms, shapely.points(starts))
     end_inside = shapely.covers(polygon_geoms, shapely.points(ends))
@@ -223,26 +192,23 @@ def detect_polygon_entry_exit(
     # transitions; fully-inside segments (mid-dwell) carry no new event.
     transitions = joined[joined['_start_inside'] != joined['_end_inside']].copy()
     if transitions.empty:
-        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(empty_cols)
 
     boundary_geoms = boundaries.loc[transitions['index_right']].values
     trans_seg_geoms = transitions.geometry.values
-    points_3857, f_segs = [], []
-    for seg_geom, boundary_geom in zip(trans_seg_geoms, boundary_geoms):
-        point, f_seg = _crossing_point_and_fraction(seg_geom, boundary_geom)
-        points_3857.append(point)
-        f_segs.append(f_seg)
+    points_3857, f_seg_arr = crossing_points_and_fractions(trans_seg_geoms, boundary_geoms)
     transitions['_point_3857'] = points_3857
     transitions_start_time = pd.to_datetime(transitions['segment_start_time'].values)
     transitions_duration_s = transitions['segment_duration_s'].values
-    f_seg_arr = np.array(f_segs, dtype=float)
-    transitions['_event_time'] = _interpolate_time(transitions_start_time, transitions_duration_s, f_seg_arr)
+    transitions['_event_time'] = interpolate_event_time(
+        transitions_start_time, transitions_duration_s, f_seg_arr
+    )
     transitions['_is_entry'] = ~transitions['_start_inside'] & transitions['_end_inside']
     transitions = transitions.sort_values(['_polygon_key', 'trip_id', 'segment_start_time'])
 
     events = _pair_polygon_transitions(transitions)
     if not events:
-        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(empty_cols)
 
     data, geometry = _build_polygon_event_table(events, polygon_id_col)
     events_gdf = gpd.GeoDataFrame(data, geometry=geometry, crs="EPSG:4326")
@@ -371,30 +337,24 @@ def _merge_close_polygon_events(
     return merged_gdf.reset_index(drop=True)
 
 
-def _read_vector_file(path: Path) -> gpd.GeoDataFrame:
-    """Read a reference vector file, dispatching to gpd.read_parquet for (Geo)Parquet and gpd.read_file otherwise."""
-    if path.suffix.lower() in {".parquet", ".geoparquet"}:
-        return gpd.read_parquet(path)
-    return gpd.read_file(path)
-
-
 def run_line_crossing_detection(segments_file: Path, passage_file: Path, output_file: Path) -> None:
-    """CLI/script entry point: detect_line_crossings, reading/writing GeoParquet/GeoJSON files."""
+    """CLI/script entry point: detect_line_crossings.
+
+    Reference inputs may be GeoParquet or anything GDAL reads; the output
+    format follows the output file's extension.
+    """
     logger.info(f"Loading segments from {segments_file}...")
     segments_gdf = gpd.read_parquet(segments_file)
 
     logger.info(f"Loading passage lines from {passage_file}...")
-    passage_lines_gdf = _read_vector_file(passage_file)
-    if passage_lines_gdf.crs is None:
-        passage_lines_gdf = passage_lines_gdf.set_crs("EPSG:4326")
+    passage_lines_gdf = assume_lonlat(read_vector(passage_file), f"Passage lines at {passage_file}")
 
     logger.info("Detecting line crossings...")
     events_gdf = detect_line_crossings(segments_gdf, passage_lines_gdf)
     logger.info(f"Found {len(events_gdf):,} crossing events.")
 
-    output_file.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Saving events to {output_file}...")
-    events_gdf.to_parquet(output_file)
+    write_vector(events_gdf, output_file)
 
 
 def run_polygon_entry_exit_detection(
@@ -404,14 +364,16 @@ def run_polygon_entry_exit_detection(
     polygon_id_col: str = "name",
     merge_gap_minutes: float = None,
 ) -> None:
-    """CLI/script entry point: detect_polygon_entry_exit, reading/writing GeoParquet/GeoJSON files."""
+    """CLI/script entry point: detect_polygon_entry_exit.
+
+    Reference inputs may be GeoParquet or anything GDAL reads; the output
+    format follows the output file's extension.
+    """
     logger.info(f"Loading segments from {segments_file}...")
     segments_gdf = gpd.read_parquet(segments_file)
 
     logger.info(f"Loading reference polygons from {polygons_file}...")
-    polygons_gdf = _read_vector_file(polygons_file)
-    if polygons_gdf.crs is None:
-        polygons_gdf = polygons_gdf.set_crs("EPSG:4326")
+    polygons_gdf = assume_lonlat(read_vector(polygons_file), f"Reference polygons at {polygons_file}")
 
     logger.info("Detecting polygon entry/exit events...")
     events_gdf = detect_polygon_entry_exit(
@@ -419,9 +381,8 @@ def run_polygon_entry_exit_detection(
     )
     logger.info(f"Found {len(events_gdf):,} events.")
 
-    output_file.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Saving events to {output_file}...")
-    events_gdf.to_parquet(output_file)
+    write_vector(events_gdf, output_file)
 
 
 # --- Encounter detection: crossings, overtakings, head-on meetings ---
@@ -736,7 +697,7 @@ def _evaluate_candidates_in_window(
     mmsi = bin_df['MMSI'].astype(str).values
     s_t = bin_df['segment_start_time'].values
     e_t = bin_df['segment_end_time'].values
-    starts, ends = _segment_start_end_coords(geoms)
+    starts, ends = segment_start_end_coords(geoms)
 
     tree = shapely.STRtree(geoms)
     env = shapely.buffer(shapely.envelope(geoms), max_distance_m)
@@ -983,7 +944,7 @@ def detect_encounters(
     _require_columns(segments_gdf, ['MMSI', 'trip_id', 'segment_start_time'], "segments_gdf")
 
     if segments_gdf.empty:
-        return gpd.GeoDataFrame({c: [] for c in ENCOUNTER_COLS}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(ENCOUNTER_COLS)
 
     gdf = segments_gdf.copy()
     if 'segment_end_time' not in gdf.columns:
@@ -999,7 +960,7 @@ def detect_encounters(
     t_min = gdf['segment_start_time'].min()
     t_max = gdf['segment_end_time'].max()
     if pd.isna(t_min) or pd.isna(t_max):
-        return gpd.GeoDataFrame({c: [] for c in ENCOUNTER_COLS}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(ENCOUNTER_COLS)
 
     if gdf.crs is None:
         raise ValueError("segments_gdf must have a defined Coordinate Reference System (CRS).")
@@ -1073,7 +1034,7 @@ def detect_encounters(
             )
 
     if not raw_records:
-        return gpd.GeoDataFrame({c: [] for c in ENCOUNTER_COLS}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(ENCOUNTER_COLS)
 
     raw_df = pd.DataFrame(raw_records)
     raw_df = raw_df.drop_duplicates(subset=['mmsi_1', 'mmsi_2', 'start_time', 'end_time', 'cpa_time'])
@@ -1347,7 +1308,7 @@ def _generate_encounter_timeseries_chunk(
         empty_cols += ['chainage_m_1', 'chainage_m_2', 'cross_track_m_1', 'cross_track_m_2', 'along_channel_gap_m']
 
     if encounters_chunk.empty:
-        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(empty_cols)
 
     records = []
     line_geoms = []
@@ -1469,7 +1430,7 @@ def _generate_encounter_timeseries_chunk(
             line_geoms.append(lines[k])
 
     if not records:
-        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(empty_cols)
 
     df_ts = pd.DataFrame(records)
     return gpd.GeoDataFrame(df_ts, geometry=line_geoms, crs="EPSG:4326").reset_index(drop=True)
@@ -1499,7 +1460,7 @@ def generate_encounter_timeseries(
         empty_cols += ['chainage_m_1', 'chainage_m_2', 'cross_track_m_1', 'cross_track_m_2', 'along_channel_gap_m']
 
     if encounters_gdf.empty or segments_gdf.empty:
-        return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+        return empty_geodataframe(empty_cols)
 
     segments_crs = str(segments_gdf.crs) if segments_gdf.crs else "EPSG:4326"
 
@@ -1532,7 +1493,7 @@ def generate_encounter_timeseries(
         results = client.gather(client.compute(tasks))
         valid_results = [r for r in results if not r.empty]
         if not valid_results:
-            return gpd.GeoDataFrame({c: [] for c in empty_cols}, geometry=[], crs="EPSG:4326")
+            return empty_geodataframe(empty_cols)
         return pd.concat(valid_results, ignore_index=True)
 
     return _generate_encounter_timeseries_chunk(
@@ -1606,11 +1567,9 @@ def run_encounter_detection(
     """CLI/script entry point: detect_encounters, reading and writing GeoParquet files."""
     if event_file is not None:
         timeseries_file = event_file
-    client = None
-    if scheduler:
-        logger.info(f"Connecting to Dask scheduler at {scheduler}...")
-        client = Client(scheduler)
-        logger.info(f"Connected to Dask scheduler: {client.dashboard_link}")
+    # Dask is optional here: without a scheduler address the pipeline runs
+    # in-process rather than spinning up a local cluster.
+    client = get_dask_client(scheduler, local_fallback=False)
 
     logger.info(f"Loading segments from {segments_file}...")
     segments_gdf = gpd.read_parquet(segments_file)
@@ -1646,20 +1605,11 @@ def run_encounter_detection(
     if stationary_file is not None:
         logger.info(f"Extracting stationary/anchored vessels (min_speed={min_moving_speed} m/s)...")
         stat_gdf = extract_stationary_vessels(segments_gdf, fairway_axis=axis_obj, min_moving_speed=min_moving_speed)
-        if stat_gdf.crs is not None and str(stat_gdf.crs) != "EPSG:4326":
-            stat_gdf = stat_gdf.to_crs("EPSG:4326")
+        stat_gdf = to_lonlat_crs(stat_gdf)
         vessel_cnt = stat_gdf['MMSI'].nunique() if not stat_gdf.empty else 0
         logger.info(f"Found {len(stat_gdf):,} stationary segments across {vessel_cnt:,} vessels.")
-        stationary_file.parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"Saving stationary vessels to {stationary_file}...")
-        if stationary_file.suffix in {".parquet", ".geoparquet"}:
-            stat_gdf.to_parquet(stationary_file)
-        elif stationary_file.suffix == ".gpkg":
-            stat_gdf.to_file(stationary_file, driver="GPKG")
-        elif stationary_file.suffix in {".geojson", ".json"}:
-            stat_gdf.to_file(stationary_file, driver="GeoJSON")
-        else:
-            stat_gdf.to_file(stationary_file)
+        write_vector(stat_gdf, stationary_file)
 
     logger.info(f"Detecting encounters (max_distance={max_distance_m}m, exclude_stationary={exclude_stationary})...")
     events_gdf = detect_encounters(
@@ -1682,16 +1632,8 @@ def run_encounter_detection(
 
     logger.info(f"Found {len(events_gdf):,} encounter events.")
 
-    output_file.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Saving encounters to {output_file}...")
-    if output_file.suffix in {".parquet", ".geoparquet"}:
-        events_gdf.to_parquet(output_file)
-    elif output_file.suffix == ".gpkg":
-        events_gdf.to_file(output_file, driver="GPKG")
-    elif output_file.suffix in {".geojson", ".json"}:
-        events_gdf.to_file(output_file, driver="GeoJSON")
-    else:
-        events_gdf.to_file(output_file)
+    write_vector(events_gdf, output_file)
 
     if timeseries_file is not None and not events_gdf.empty:
         logger.info(f"Generating encounter time series (step={timeseries_step_seconds}s)...")
@@ -1705,16 +1647,8 @@ def run_encounter_detection(
             max_distance_m=max_distance_m,
         )
         logger.info(f"Generated {len(ts_gdf):,} time series connecting lines.")
-        timeseries_file.parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"Saving encounter time series to {timeseries_file}...")
-        if timeseries_file.suffix in {".parquet", ".geoparquet"}:
-            ts_gdf.to_parquet(timeseries_file)
-        elif timeseries_file.suffix == ".gpkg":
-            ts_gdf.to_file(timeseries_file, driver="GPKG")
-        elif timeseries_file.suffix in {".geojson", ".json"}:
-            ts_gdf.to_file(timeseries_file, driver="GeoJSON")
-        else:
-            ts_gdf.to_file(timeseries_file)
+        write_vector(ts_gdf, timeseries_file)
 
 
 

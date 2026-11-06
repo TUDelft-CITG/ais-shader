@@ -15,7 +15,9 @@ import numpy as np
 import rasterio
 import rioxarray
 import xarray as xr
-from dask.distributed import Client, as_completed
+from dask.distributed import as_completed
+
+from .dask_utils import get_dask_client
 from datashader.colors import viridis
 from PIL import Image
 from tqdm import tqdm
@@ -511,12 +513,7 @@ def run_post_processing(run_dir, base_zoom, scheduler, clean_intermediate, cogs,
 
     dask.config.set(dask_config)
     
-    if scheduler:
-        client = Client(scheduler)
-        logger.info(f"Connected to Dask scheduler at {scheduler}")
-    else:
-        client = Client() # Local cluster
-        logger.info(f"Started local Dask cluster: {client.dashboard_link}")
+    client = get_dask_client(scheduler)
 
     nc_dir = run_dir / "zarr"
 
