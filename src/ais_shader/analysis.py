@@ -4,11 +4,43 @@ import geopandas as gpd
 import pandas as pd
 import dask.dataframe as dd
 import shapely
-from shapely.geometry import Point, LineString
 import numpy as np
-from dask.distributed import Client, performance_report
+from dask.distributed import performance_report
+
+from ais_shader.crossings import (
+    N_LOC_BINS,
+    add_line_direction_vectors,
+    bin_segment_geometry,
+    classify_crossing_direction,
+    crossing_points_and_fractions,
+    fraction_along,
+)
+from ais_shader.dask_utils import get_dask_client
+from ais_shader.preprocessing import SOG_CAP_KNOTS
+from ais_shader.vector_io import read_vector, to_lonlat_crs, to_metric_crs, write_vector
 
 logger = logging.getLogger(__name__)
+
+CROSSING_COLS = ['PassageId', 'speed', 'loc_fraction', 'direction']
+
+
+def _interpolate_crossing_speed(sog_start, sog_end, f_seg) -> np.ndarray:
+    """
+    Speed at the crossing point, interpolated between the segment's endpoint SOGs.
+
+    An endpoint whose SOG is missing or at/above the AIS "not available"
+    sentinel (SOG_CAP_KNOTS, i.e. raw 1023) falls back to the other endpoint's
+    value; when neither endpoint is usable the crossing gets NaN.
+    """
+    start = np.asarray(sog_start, dtype=float)
+    end = np.asarray(sog_end, dtype=float)
+    start_unusable = np.isnan(start) | (start >= SOG_CAP_KNOTS)
+    end_unusable = np.isnan(end) | (end >= SOG_CAP_KNOTS)
+    start_filled = np.where(start_unusable, end, start)
+    end_filled = np.where(end_unusable, start, end)
+    speed = start_filled + np.asarray(f_seg, dtype=float) * (end_filled - start_filled)
+    return np.where(np.isnan(start_filled) | (start_filled >= SOG_CAP_KNOTS), np.nan, speed)
+
 
 def process_partition(
     df: pd.DataFrame, 
@@ -29,7 +61,7 @@ def process_partition(
     6. Perform spatial join with passage lines and compute crossing speeds and locations along passage lines.
     """
     if df.empty:
-        return pd.DataFrame(columns=['PassageId', 'speed', 'loc_fraction', 'direction'])
+        return pd.DataFrame(columns=CROSSING_COLS)
         
     # Sort points by track_id and timestamp
     df_sorted = df.sort_values(by=['track_id', 'timestamp']).copy()
@@ -63,7 +95,7 @@ def process_partition(
     coords_end_m = coords_end[mask]
     
     if len(coords_start_m) == 0:
-        return pd.DataFrame(columns=['PassageId', 'speed', 'loc_fraction', 'direction'])
+        return pd.DataFrame(columns=CROSSING_COLS)
         
     x_start_m = coords_start_m[:, 0]
     y_start_m = coords_start_m[:, 1]
@@ -86,7 +118,7 @@ def process_partition(
     track_f = track_start[mask][bbox_overlap]
     
     if len(track_f) == 0:
-        return pd.DataFrame(columns=['PassageId', 'speed', 'loc_fraction', 'direction'])
+        return pd.DataFrame(columns=CROSSING_COLS)
         
     # Create LineStrings in a vectorized way using shapely.linestrings
     segment_coords = np.stack([coords_start_f, coords_end_f], axis=1)
@@ -110,59 +142,30 @@ def process_partition(
     joined = gpd.sjoin(segments_gdf, passage_lines_gdf, predicate='intersects')
     
     if joined.empty:
-        return pd.DataFrame(columns=['PassageId', 'speed', 'loc_fraction', 'direction'])
+        return pd.DataFrame(columns=CROSSING_COLS)
         
     passage_geoms = passage_lines_gdf.geometry.loc[joined['index_right']].values
     segment_geoms = joined.geometry.values
     
-    speeds = []
-    loc_fractions = []
-    for i in range(len(joined)):
-        seg_geom = segment_geoms[i]
-        pass_geom = passage_geoms[i]
-        
-        isect = seg_geom.intersection(pass_geom)
-        if isect.is_empty:
-            f_seg = 0.0
-            f_pass = 0.0
-        elif not isinstance(isect, Point):
-            isect = isect.centroid
-            f_seg = seg_geom.project(isect, normalized=True)
-            f_pass = pass_geom.project(isect, normalized=True)
-        else:
-            f_seg = seg_geom.project(isect, normalized=True)
-            f_pass = pass_geom.project(isect, normalized=True)
-            
-        row = joined.iloc[i]
-        sog_start_val = row['sog_start']
-        sog_end_val = row['sog_end']
-        
-        # Handle nan or invalid sog (e.g. 1023 or >= 102.2)
-        if pd.isna(sog_start_val) or sog_start_val >= 102.2:
-            sog_start_val = sog_end_val
-        if pd.isna(sog_end_val) or sog_end_val >= 102.2:
-            sog_end_val = sog_start_val
-            
-        if pd.isna(sog_start_val) or sog_start_val >= 102.2:
-            speed = np.nan
-        else:
-            speed = sog_start_val + f_seg * (sog_end_val - sog_start_val)
-        speeds.append(speed)
-        loc_fractions.append(f_pass)
-        
-    joined['speed'] = speeds
-    joined['loc_fraction'] = loc_fractions
-    
-    # Calculate direction: dot product of segment vector and normal vector of passage line
-    L_x_val = passage_lines_gdf['L_x'].loc[joined['index_right']].values
-    L_y_val = passage_lines_gdf['L_y'].loc[joined['index_right']].values
-    S_x = (joined['x_end'] - joined['x_start']).values
-    S_y = (joined['y_end'] - joined['y_start']).values
-    
-    dot_product = S_x * (-L_y_val) + S_y * L_x_val
-    joined['direction'] = np.where(dot_product >= 0, 'down', 'up')
-    
-    return joined[['PassageId', 'speed', 'loc_fraction', 'direction']]
+    # allow_empty=True: the sjoin predicate should guarantee a real
+    # intersection, but a degenerate one is tolerated here (crossing placed at
+    # the segment's start) rather than failing a whole Dask partition.
+    points, f_segs = crossing_points_and_fractions(segment_geoms, passage_geoms, allow_empty=True)
+
+    joined['speed'] = _interpolate_crossing_speed(
+        joined['sog_start'].values, joined['sog_end'].values, f_segs
+    )
+    joined['loc_fraction'] = [
+        fraction_along(pass_geom, point) for pass_geom, point in zip(passage_geoms, points)
+    ]
+    joined['direction'] = classify_crossing_direction(
+        S_x=(joined['x_end'] - joined['x_start']).values,
+        S_y=(joined['y_end'] - joined['y_start']).values,
+        L_x=passage_lines_gdf['L_x'].loc[joined['index_right']].values,
+        L_y=passage_lines_gdf['L_y'].loc[joined['index_right']].values,
+    )
+
+    return joined[CROSSING_COLS]
 
 
 def run_passage_analysis(
@@ -175,28 +178,14 @@ def run_passage_analysis(
     """
     Run the passage analysis using Dask with performance profiling.
     """
-    # Connect to Dask
-    if scheduler:
-        logger.info(f"Connecting to Dask scheduler at {scheduler}...")
-        client = Client(scheduler)
-    else:
-        logger.info("Starting Local Dask Client...")
-        client = Client()
-    logger.info(f"Dashboard: {client.dashboard_link}")
-    
-    # Load passage lines
+    # Held for the whole run: the Client is kept referenced so the local
+    # cluster is not torn down mid-computation.
+    client = get_dask_client(scheduler)  # noqa: F841
+
+    # Load passage lines into the metric working CRS and pre-calculate each
+    # line's own start->end vector, which fixes the up/down direction convention.
     logger.info(f"Loading passage lines from {passage_file}...")
-    passage_lines = gpd.read_file(passage_file)
-    if passage_lines.crs != "EPSG:3857":
-        logger.info("Reprojecting passage lines to EPSG:3857...")
-        passage_lines = passage_lines.to_crs("EPSG:3857")
-        
-    # Pre-calculate passage line vectors
-    coords_list = [g.coords for g in passage_lines.geometry]
-    L_x = np.array([c[-1][0] - c[0][0] for c in coords_list])
-    L_y = np.array([c[-1][1] - c[0][1] for c in coords_list])
-    passage_lines['L_x'] = L_x
-    passage_lines['L_y'] = L_y
+    passage_lines = add_line_direction_vectors(to_metric_crs(read_vector(passage_file)))
     
     # Get total bounds of passage lines for pre-filtering
     minx, miny, maxx, maxy = passage_lines.total_bounds
@@ -211,7 +200,7 @@ def run_passage_analysis(
     output_file.parent.mkdir(parents=True, exist_ok=True)
     report_path = output_file.parent / f"{output_file.stem}-dask-report.html"
     logger.info(f"Computing crossings per partition and saving performance report to {report_path}...")
-    meta = pd.DataFrame(columns=['PassageId', 'speed', 'loc_fraction', 'direction'])
+    meta = pd.DataFrame(columns=CROSSING_COLS)
     with performance_report(filename=str(report_path)):
         crossings_df = ddf.map_partitions(
             process_partition,
@@ -262,10 +251,10 @@ def run_passage_analysis(
     output_gdf['median_speed_up'] = output_gdf['median_speed_up'].fillna(0.0)
     output_gdf['median_speed_down'] = output_gdf['median_speed_down'].fillna(0.0)
     
-    # --- 20-Bin Segments generation ---
-    logger.info("Calculating 20-bin segment statistics...")
-    loc_bins_list = np.linspace(0.0, 1.0, 21)
-    loc_bin_labels = list(range(20))
+    # --- Per-location bin segment generation ---
+    logger.info(f"Calculating {N_LOC_BINS}-bin segment statistics...")
+    loc_bins_list = np.linspace(0.0, 1.0, N_LOC_BINS + 1)
+    loc_bin_labels = list(range(N_LOC_BINS))
     # Clip loc_fraction to [0.0, 1.0 - 1e-9] to handle loc_fraction == 1.0 safely when right=False
     loc_fraction_clipped = crossings_df['loc_fraction'].clip(0.0, 1.0 - 1e-9)
     crossings_df['BinIndex'] = pd.cut(loc_fraction_clipped, bins=loc_bins_list, labels=loc_bin_labels, right=False)
@@ -293,8 +282,8 @@ def run_passage_analysis(
         # Merge bin_stats_pivot back to output_gdf
         output_gdf = output_gdf.merge(bin_stats_pivot, on='PassageId', how='left')
         
-    # Ensure all 80 bin columns exist in output_gdf and are filled/typed correctly
-    for i in range(20):
+    # Ensure every bin/direction column pair exists in output_gdf and is filled/typed correctly
+    for i in range(N_LOC_BINS):
         for d in ['up', 'down']:
             freq_col = f"loc_bin_{i}_{d}"
             median_col = f"median_speed_loc_{i}_{d}"
@@ -313,14 +302,11 @@ def run_passage_analysis(
     
     # Reproject back to EPSG:4326 for GIS compatibility
     logger.info("Reprojecting velocities output back to EPSG:4326...")
-    output_gdf = output_gdf.to_crs("EPSG:4326")
+    output_gdf = to_lonlat_crs(output_gdf)
     
     # Save main velocities output
     logger.info(f"Saving main velocities results to {output_file}...")
-    if output_file.suffix.lower() == '.gpkg':
-        output_gdf.to_file(output_file, driver="GPKG")
-    else:
-        output_gdf.to_file(output_file, driver="GeoJSON")
+    write_vector(output_gdf, output_file)
         
     # Filter to segments with crossings
     stats_df = stats_df[stats_df['Frequency'] > 0].copy()
@@ -345,15 +331,11 @@ def run_passage_analysis(
     stats_df['ProfileLength'] = stats_df['PassageId'].map(passage_lengths)
     
     logger.info("Generating physical LineString geometries for active bin segments...")
-    segment_geoms_3857 = []
-    for _, row in stats_df.iterrows():
-        pid = row['PassageId']
-        bin_idx = int(row['BinIndex'])
-        geom_3857 = passage_geoms_3857[pid]
-        p1 = geom_3857.interpolate(bin_idx / 20.0, normalized=True)
-        p2 = geom_3857.interpolate((bin_idx + 1) / 20.0, normalized=True)
-        segment_geoms_3857.append(LineString([p1, p2]))
-        
+    segment_geoms_3857 = [
+        bin_segment_geometry(passage_geoms_3857[row['PassageId']], int(row['BinIndex']))
+        for _, row in stats_df.iterrows()
+    ]
+    
     stats_gdf_3857 = gpd.GeoDataFrame(
         stats_df,
         geometry=segment_geoms_3857,
@@ -361,15 +343,15 @@ def run_passage_analysis(
     )
     
     # Reproject to EPSG:4326 for final output
-    stats_gdf_4326 = stats_gdf_3857.to_crs("EPSG:4326")
+    stats_gdf_4326 = to_lonlat_crs(stats_gdf_3857)
     stats_gdf_4326 = stats_gdf_4326.rename(columns={'direction': 'Direction'})
     stats_gdf_4326['MedianSpeed'] = stats_gdf_4326['MedianSpeed'].fillna(0.0)
     stats_gdf_4326['ProfileLength'] = stats_gdf_4326['ProfileLength'].fillna(0.0)
-    stats_gdf_4326['BinWidth'] = stats_gdf_4326['ProfileLength'] / 20.0
+    stats_gdf_4326['BinWidth'] = stats_gdf_4326['ProfileLength'] / N_LOC_BINS
     
     # Save segments output next to output_file with matching stem
     segments_output_file = output_file.parent / f"{output_file.stem}_bin_segments.geojson"
     logger.info(f"Saving bin segments results to {segments_output_file}...")
-    stats_gdf_4326.to_file(segments_output_file, driver="GeoJSON")
+    write_vector(stats_gdf_4326, segments_output_file)
 
     logger.info("Analysis and segment generation complete!")

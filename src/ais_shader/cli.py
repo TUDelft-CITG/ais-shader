@@ -6,9 +6,10 @@ from pathlib import Path
 
 import click
 import dask_geopandas
-from dask.distributed import Client
 
 # Import from src modules
+from .dask_utils import get_dask_client
+from .vector_io import write_vector
 from .renderer import run_rendering
 from .postprocessing import run_post_processing
 from .preprocessing import run_preprocessing, run_wkb_conversion, run_ndjson_conversion, run_csv_conversion, run_linestring_generation, run_segment_generation, run_outlier_filtering, normalize_to_epoch
@@ -451,11 +452,8 @@ def compute(input_file, output_file, vessel_id_col, time_col, x_col, y_col, sche
     """
     output_file = output_file or _default_output_path(input_file, "-trajectorized.geoparquet")
 
-    if scheduler:
-        client = Client(scheduler)
-    else:
-        client = Client()
-        
+    client = get_dask_client(scheduler)
+
     try:
         logger.info(f"Reading input from {input_file}...")
         read_kwargs = {}
@@ -648,7 +646,7 @@ def events():
     "-o",
     type=click.Path(path_type=Path),
     default=None,
-    help="Path to output GeoParquet file. Defaults to input file name with -line-crossings.geoparquet extension.",
+    help="Path to output GeoParquet/GPKG/GeoJSON file (format follows the extension). Defaults to input file name with -line-crossings.geoparquet extension.",
 )
 def line_crossings(input_file, passage_file, output_file):
     """
@@ -687,7 +685,7 @@ def line_crossings(input_file, passage_file, output_file):
     "-o",
     type=click.Path(path_type=Path),
     default=None,
-    help="Path to output GeoParquet file. Defaults to input file name with -polygon-events.geoparquet extension.",
+    help="Path to output GeoParquet/GPKG/GeoJSON file (format follows the extension). Defaults to input file name with -polygon-events.geoparquet extension.",
 )
 def polygon_entry_exit(input_file, polygons_file, polygon_id_col, merge_gap_minutes, output_file):
     """
@@ -902,10 +900,7 @@ def build_us_centerline(
     gdf = axis.to_geodataframe(crs=metric_crs, clip_bbox=bbox)
     output_file.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Saving continuous metric fairway centerline ({axis.fairway_name}, length={gdf['length_km'].iloc[0]} km) to {output_file}...")
-    if output_file.suffix in [".parquet", ".geoparquet"]:
-        gdf.to_parquet(output_file)
-    else:
-        gdf.to_file(output_file)
+    write_vector(gdf, output_file)
     logger.info("Fairway centerline preprocessing complete.")
 
 
@@ -972,14 +967,7 @@ def build_rws_centerline(output_file, fairway_id, river_name, bbox, metric_crs, 
     gdf = axis.to_geodataframe(crs=metric_crs)
     output_file.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Saving continuous metric fairway centerline ({axis.fairway_name}, length={gdf['length_km'].iloc[0]} km) to {output_file}...")
-    if output_file.suffix in [".parquet", ".geoparquet"]:
-        gdf.to_parquet(output_file)
-    elif output_file.suffix == ".gpkg":
-        gdf.to_file(output_file, driver="GPKG")
-    elif output_file.suffix in [".geojson", ".json"]:
-        gdf.to_file(output_file, driver="GeoJSON")
-    else:
-        gdf.to_file(output_file)
+    write_vector(gdf, output_file)
     logger.info("RWS Fairway centerline processing complete.")
 
 

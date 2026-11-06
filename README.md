@@ -82,7 +82,18 @@ To build the compiled CGAL C++ convex hull extension, you need development libra
   module load 2025 CGAL Boost GMP MPFR
   ```
 
-### Build & Install
+### Build & Install & Running tests
+To run the tests you need to have 7z command line tool installed on your system
+
+* **Ubuntu / Debian**:
+  ```bash
+  sudo apt-get install p7zip-full
+  ```
+* **macOS** (using Homebrew):
+  ```bash
+  brew install p7zip
+  ```
+
 Install the dependencies and compile the C++ extension in editable mode:
 ```bash
 # Sync python dependencies
@@ -90,6 +101,9 @@ uv sync
 
 # Compile the C++ extension and install the package
 uv pip install -e .
+
+# running tests
+uv run pytest tests/
 ```
 *(Alternatively, run `bash compile_and_test.sh` to compile the extensions and run the full test suite).*
 

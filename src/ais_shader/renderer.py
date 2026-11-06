@@ -16,10 +16,11 @@ import psutil
 import rioxarray
 import shapely
 import xarray as xr
-from dask.distributed import Client, get_client, wait
+from dask.distributed import get_client, wait
 from rasterio.transform import from_bounds
 
 # Import from src modules
+from .dask_utils import get_dask_client
 from .data_loader import load_and_process_data
 
 logger = logging.getLogger(__name__)
@@ -418,14 +419,7 @@ def run_rendering(config_file: Path, output_dir: Path, scheduler: str, input_fil
 
     dask.config.set(dask_config)
     
-    if scheduler:
-        logger.info(f"Connecting to Dask scheduler at {scheduler}...")
-        client = Client(scheduler)
-    else:
-        logger.info("Starting Local Dask Client...")
-        client = Client()
-        
-    logger.info(f"Dask Dashboard link: {client.dashboard_link}")
+    client = get_dask_client(scheduler)
 
     # Create or use existing run directory
     if resume_dir:

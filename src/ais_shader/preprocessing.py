@@ -13,11 +13,12 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import shapely
-from dask.distributed import Client
 from shapely.geometry import LineString
 from tqdm.auto import tqdm
 from .archive import is_encrypted_zip, find_zip_password, iter_zip_member_lines
+from .dask_utils import get_dask_client
 from .data_loader import detect_hive_partitioning
+from .vector_io import write_vector
 from .moving_dask.trajectory import filter_speed_outliers, DEFAULT_OUTLIER_V_MAX, DEFAULT_OUTLIER_D_MIN
 
 logger = logging.getLogger(__name__)
@@ -241,14 +242,10 @@ def run_preprocessing(input_file: Path, output_file: Path, partitions: int, sche
     """
     Preprocess AIS data: GeoParquet/GPKG -> Reproject -> Spatial Partition -> Save.
     """
-    if scheduler:
-        logger.info(f"Connecting to Dask scheduler at {scheduler}...")
-        client = Client(scheduler)
-    else:
-        logger.info("Starting Local Dask Client...")
-        client = Client()
-    
-    logger.info(f"Dashboard: {client.dashboard_link}")
+    # Held for the whole run: the Client is kept referenced so the local
+    # cluster is not torn down mid-computation.
+    client = get_dask_client(scheduler)  # noqa: F841
+
 
     logger.info(f"Reading {input_file}...")
     
@@ -301,14 +298,10 @@ def run_wkb_conversion(input_file: Path, output_file: Path, partitions: int, sch
     Convert a WKB-based Parquet file (containing a 'Shape' WKB column)
     to a standard GeoParquet file.
     """
-    if scheduler:
-        logger.info(f"Connecting to Dask scheduler at {scheduler}...")
-        client = Client(scheduler)
-    else:
-        logger.info("Starting Local Dask Client...")
-        client = Client()
-    
-    logger.info(f"Dashboard: {client.dashboard_link}")
+    # Held for the whole run: the Client is kept referenced so the local
+    # cluster is not torn down mid-computation.
+    client = get_dask_client(scheduler)  # noqa: F841
+
     logger.info(f"Reading WKB Parquet from {input_file}...")
     
     ddf = dd.read_parquet(input_file, engine="pyarrow")
@@ -587,14 +580,8 @@ def run_ndjson_conversion(input_file: Path, output_file: Path, scheduler: str):
         _convert_zip_ndjson(input_file, output_file)
         return
 
-    if scheduler:
-        logger.info(f"Connecting to Dask scheduler at {scheduler}...")
-        client = Client(scheduler)
-    else:
-        logger.info("Starting Local Dask Client...")
-        client = Client()
+    client = get_dask_client(scheduler)
 
-    logger.info(f"Dashboard: {client.dashboard_link}")
 
     try:
         logger.info(f"Reading NDJSON from {input_file} using Dask Bag...")
@@ -673,12 +660,7 @@ def run_csv_conversion(
     """
     Convert CSV AIS data (standard or zipped) to standard flat GeoParquet.
     """
-    if scheduler:
-        logger.info(f"Connecting to Dask scheduler at {scheduler}...")
-        client = Client(scheduler)
-    else:
-        logger.info("Starting Local Dask Client...")
-        client = Client()
+    client = get_dask_client(scheduler)
         
     try:
         logger.info(f"Reading CSV from {input_file} using Dask DataFrame...")
@@ -1090,13 +1072,6 @@ def run_segment_generation(
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Saving segments to: {output_file}...")
-    if output_file.suffix in {".parquet", ".geoparquet"}:
-        gdf_segments.to_parquet(output_file)
-    elif output_file.suffix == ".gpkg":
-        gdf_segments.to_file(output_file, driver="GPKG")
-    elif output_file.suffix in {".geojson", ".json"}:
-        gdf_segments.to_file(output_file, driver="GeoJSON")
-    else:
-        gdf_segments.to_file(output_file)
+    write_vector(gdf_segments, output_file)
     logger.info("Segment generation complete!")
 
